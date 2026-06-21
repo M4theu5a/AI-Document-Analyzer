@@ -4,6 +4,10 @@ type AnalyzeBody = {
   mode?: "analysis" | "question";
   documentText?: string;
   question?: string;
+  chatHistory?: Array<{
+    role: "user" | "assistant";
+    content: string;
+  }>;
 };
 
 const encoder = new TextEncoder();
@@ -39,7 +43,7 @@ export async function POST(request: Request) {
 
   const prompt =
     body.mode === "question"
-      ? buildQuestionPrompt(documentText, body.question)
+      ? buildQuestionPrompt(documentText, body.question, body.chatHistory)
       : buildAnalysisPrompt(documentText);
 
   const upstream = await fetch(DEEPSEEK_CHAT_URL, {
@@ -160,8 +164,20 @@ Document:
 """${documentText}"""`;
 }
 
-function buildQuestionPrompt(documentText: string, question?: string) {
-  return `You are answering questions about a business document. Use only the document text. If the answer is not present, say what is missing and suggest how to verify it.
+function buildQuestionPrompt(
+  documentText: string,
+  question?: string,
+  chatHistory: AnalyzeBody["chatHistory"] = [],
+) {
+  const history = chatHistory
+    .slice(-8)
+    .map((message) => `${message.role === "user" ? "User" : "Assistant"}: ${message.content}`)
+    .join("\n\n");
+
+  return `You are answering questions about a business document. Use only the document text and the conversation history. If the answer is not present, say what is missing and suggest how to verify it.
+
+Conversation history:
+${history || "No previous messages."}
 
 Question:
 ${question?.trim() || "What should I know about this document?"}
