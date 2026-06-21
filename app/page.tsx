@@ -3,20 +3,21 @@
 import {
   AlertCircle,
   ArrowRight,
-  Bot,
   CheckCircle2,
   Clock,
   Download,
+  FileSearch,
   FileText,
   Loader2,
   MessageCircle,
   MessageSquareText,
+  Moon,
   MoreHorizontal,
   Pencil,
   Plus,
   Search,
   ShieldCheck,
-  Sparkles,
+  Sun,
   Trash2,
   Upload,
   UserRound,
@@ -35,6 +36,7 @@ import { normalizeBullets, parseAnalysisSections } from "@/lib/analysis";
 type IntakeMode = "upload" | "paste";
 type ResultTab = "summary" | "keyPoints" | "risksActions";
 type ChatRole = "user" | "assistant";
+type ThemeMode = "light" | "dark";
 
 type ChatMessage = {
   id: string;
@@ -54,6 +56,7 @@ type ChatSession = {
 };
 
 const CHAT_STORAGE_KEY = "ai-document-analyzer-chats-v1";
+const THEME_STORAGE_KEY = "ai-document-analyzer-theme-v1";
 
 const tabs: Array<{ id: ResultTab; label: string; helper: string }> = [
   {
@@ -73,17 +76,6 @@ const tabs: Array<{ id: ResultTab; label: string; helper: string }> = [
   },
 ];
 
-const sampleText = `Service Agreement
-
-Client: BankX Digital Services
-Vendor: Xenet AI Solutions
-Effective date: 1 March 2026
-Payment terms: Net 30 after invoice receipt.
-
-The vendor will deliver an AI-powered document processing workflow for invoice intake, validation, summary generation, and exception routing. The service must process uploaded PDF invoices and flag missing supplier IDs, tax mismatches, duplicated invoice numbers, and payment deadlines within five business days.
-
-The contract includes a 99.5% monthly uptime target. Customer data must remain encrypted in transit and at rest. Any subprocessors must be disclosed before production use. The first pilot milestone is due on 15 April 2026.`;
-
 export default function Home() {
   const [intakeMode, setIntakeMode] = useState<IntakeMode>("upload");
   const [documentText, setDocumentText] = useState("");
@@ -92,17 +84,20 @@ export default function Home() {
   const [activeTab, setActiveTab] = useState<ResultTab>("summary");
   const [question, setQuestion] = useState("");
   const [chatSearch, setChatSearch] = useState("");
+  const [themeMode, setThemeMode] = useState<ThemeMode>("light");
   const [openChatMenuId, setOpenChatMenuId] = useState("");
   const [renamingChatId, setRenamingChatId] = useState("");
   const [renameDraft, setRenameDraft] = useState("");
   const [chats, setChats] = useState<ChatSession[]>([]);
   const [activeChatId, setActiveChatId] = useState("");
+  const [draftDocumentId, setDraftDocumentId] = useState("");
   const [hasLoadedChats, setHasLoadedChats] = useState(false);
   const [isExtracting, setIsExtracting] = useState(false);
   const [isAnalyzing, setIsAnalyzing] = useState(false);
   const [isAnswering, setIsAnswering] = useState(false);
   const [error, setError] = useState("");
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const documentWorkspaceRef = useRef<HTMLDivElement>(null);
 
   const sections = useMemo(() => parseAnalysisSections(rawAnalysis), [rawAnalysis]);
   const currentTab = tabs.find((tab) => tab.id === activeTab)!;
@@ -123,8 +118,13 @@ export default function Home() {
     [chats],
   );
   const documentChats = useMemo(
-    () => recentChats.filter(hasMeaningfulChat),
-    [recentChats],
+    () =>
+      recentChats.filter(
+        (chat) =>
+          hasMeaningfulChat(chat) ||
+          (chat.id === draftDocumentId && chat.id === activeChatId),
+      ),
+    [activeChatId, draftDocumentId, recentChats],
   );
   const filteredChats = useMemo(() => {
     const query = chatSearch.trim().toLowerCase();
@@ -140,6 +140,7 @@ export default function Home() {
         .includes(query),
     );
   }, [chatSearch, documentChats]);
+  const hasDocument = Boolean(documentText.trim());
   const hasAnalysis = Boolean(rawAnalysis.trim());
   const hasChatMessages = Boolean(activeChat?.messages.length);
   const analysisExport = useMemo(
@@ -147,6 +148,7 @@ export default function Home() {
     [documentName, rawAnalysis, sections],
   );
   const chatExport = useMemo(() => buildChatExport(activeChat), [activeChat]);
+  const isDarkTheme = themeMode === "dark";
 
   useEffect(() => {
     try {
@@ -154,7 +156,7 @@ export default function Home() {
       const parsed = saved ? (JSON.parse(saved) as ChatSession[]) : [];
 
       if (Array.isArray(parsed) && parsed.length > 0) {
-        const validChats = parsed.filter(isChatSession);
+        const validChats = parsed.filter(isChatSession).filter(hasMeaningfulChat);
         const firstChat = validChats[0];
 
         if (firstChat) {
@@ -178,26 +180,54 @@ export default function Home() {
   }, []);
 
   useEffect(() => {
+    const savedTheme = window.localStorage.getItem(THEME_STORAGE_KEY);
+
+    if (savedTheme === "light" || savedTheme === "dark") {
+      setThemeMode(savedTheme);
+    }
+  }, []);
+
+  useEffect(() => {
     if (!hasLoadedChats) {
       return;
     }
 
-    window.localStorage.setItem(CHAT_STORAGE_KEY, JSON.stringify(chats));
+    window.localStorage.setItem(
+      CHAT_STORAGE_KEY,
+      JSON.stringify(chats.filter(hasMeaningfulChat)),
+    );
   }, [chats, hasLoadedChats]);
 
-  async function handleFileChange(event: ChangeEvent<HTMLInputElement>) {
-    const file = event.target.files?.[0];
+  useEffect(() => {
+    window.localStorage.setItem(THEME_STORAGE_KEY, themeMode);
+  }, [themeMode]);
 
-    if (!file) {
+  useEffect(() => {
+    const workspace = documentWorkspaceRef.current;
+
+    if (!workspace) {
+      return;
+    }
+
+    workspace.scrollTo({
+      top: workspace.scrollHeight,
+      behavior: isAnswering ? "smooth" : "auto",
+    });
+  }, [activeChatId, activeChat?.messages.length, activeChat?.updatedAt, isAnswering]);
+
+  async function handleFileChange(event: ChangeEvent<HTMLInputElement>) {
+    const files = Array.from(event.target.files ?? []);
+
+    if (!files.length) {
       return;
     }
 
     setError("");
     setIsExtracting(true);
-    setDocumentName(file.name);
+    setDocumentName(buildSelectedFilesLabel(files));
 
     const formData = new FormData();
-    formData.append("file", file);
+    files.forEach((file) => formData.append("files", file));
 
     try {
       const response = await fetch("/api/extract", {
@@ -205,15 +235,20 @@ export default function Home() {
         body: formData,
       });
 
-      const payload = (await response.json()) as { text?: string; error?: string };
+      const payload = (await response.json()) as {
+        fileName?: string;
+        text?: string;
+        error?: string;
+      };
 
       if (!response.ok || !payload.text) {
-        throw new Error(payload.error || "Could not extract text from the document.");
+        throw new Error(payload.error || "Could not extract text from the documents.");
       }
 
       setDocumentText(payload.text);
       setRawAnalysis("");
-      attachDocumentToActiveChat(file.name, payload.text);
+      attachDocumentToActiveChat(payload.fileName ?? buildSelectedFilesLabel(files), payload.text);
+      setDraftDocumentId("");
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : "Document upload failed.");
     } finally {
@@ -223,7 +258,7 @@ export default function Home() {
 
   async function handleAnalyze() {
     if (!documentText.trim()) {
-      setError("Upload a document or paste text before analysis.");
+      setError("Upload documents or paste text before analysis.");
       return;
     }
 
@@ -253,12 +288,12 @@ export default function Home() {
     const trimmedQuestion = question.trim();
 
     if (!documentText.trim()) {
-      setError("Load a document before asking questions.");
+      setError("Load a document before using the workspace.");
       return;
     }
 
     if (!trimmedQuestion) {
-      setError("Write a question first.");
+      setError("Write a prompt first.");
       return;
     }
 
@@ -290,6 +325,7 @@ export default function Home() {
       messages: [...chat.messages, userMessage, assistantMessage],
       updatedAt: now,
     }));
+    setDraftDocumentId("");
 
     try {
       await streamFromApi(
@@ -310,19 +346,11 @@ export default function Home() {
     }
   }
 
-  function loadSample() {
-    setIntakeMode("paste");
-    setDocumentName("sample-service-agreement.txt");
-    setDocumentText(sampleText);
-    setRawAnalysis("");
-    setError("");
-    attachDocumentToActiveChat("sample-service-agreement.txt", sampleText);
-  }
-
   function handlePastedDocument(nextText: string) {
     setDocumentText(nextText);
     setDocumentName("pasted-document.txt");
     attachDocumentToActiveChat("pasted-document.txt", nextText);
+    setDraftDocumentId("");
   }
 
   function createAndActivateChat(
@@ -330,8 +358,9 @@ export default function Home() {
     nextDocumentText = "",
   ) {
     const nextChat = createChatSession(nextDocumentName, nextDocumentText);
-    setChats((previous) => [nextChat, ...previous]);
+    setChats((previous) => [nextChat, ...previous.filter(hasMeaningfulChat)]);
     setActiveChatId(nextChat.id);
+    setDraftDocumentId(hasMeaningfulChat(nextChat) ? "" : nextChat.id);
     setDocumentName(nextDocumentName);
     setDocumentText(nextDocumentText);
     setIntakeMode(nextDocumentText ? "paste" : "upload");
@@ -346,6 +375,7 @@ export default function Home() {
 
   function selectChat(chat: ChatSession) {
     setActiveChatId(chat.id);
+    setDraftDocumentId(chat.id === draftDocumentId ? draftDocumentId : "");
     setDocumentName(chat.documentName);
     setDocumentText(chat.documentText);
     setIntakeMode(chat.documentText ? "paste" : "upload");
@@ -386,6 +416,7 @@ export default function Home() {
       documentName: nextName,
       updatedAt: new Date().toISOString(),
     }));
+    setDraftDocumentId("");
 
     if (chatId === activeChatId) {
       setDocumentName(nextName);
@@ -398,6 +429,7 @@ export default function Home() {
     setOpenChatMenuId("");
     setRenamingChatId("");
     setRenameDraft("");
+    setDraftDocumentId("");
 
     setChats((previous) => {
       const remaining = previous.filter((chat) => chat.id !== chatId);
@@ -427,15 +459,15 @@ export default function Home() {
     await downloadPdf(
       analysisExport,
       `${toFileSlug(documentName)}-analysis.pdf`,
-      "AI Document Analysis",
+      "Document Intelligence Review",
     );
   }
 
   async function exportChat() {
     await downloadPdf(
       chatExport,
-      `${toFileSlug(activeChat?.title ?? documentName)}-qa.pdf`,
-      "Document Q&A",
+      `${toFileSlug(activeChat?.title ?? documentName)}-document-export.pdf`,
+      "Document Export",
     );
   }
 
@@ -477,420 +509,467 @@ export default function Home() {
   }
 
   return (
-    <main className="min-h-screen px-4 py-6 sm:px-6 lg:px-8">
-      <section className="mx-auto flex max-w-7xl flex-col gap-6">
-        <header className="flex flex-col gap-5 rounded-[2rem] border border-white/80 bg-white/75 p-5 shadow-soft backdrop-blur md:flex-row md:items-center md:justify-between">
-          <div className="flex items-start gap-4">
-            <div className="flex size-12 shrink-0 items-center justify-center rounded-2xl bg-ink text-white">
-              <Sparkles className="size-6" />
+    <main
+      className={`theme-root ${isDarkTheme ? "theme-dark" : "theme-light"} min-h-screen px-4 py-6 transition-colors duration-500 sm:px-6 lg:px-8`}
+    >
+      <section className="relative z-10 mx-auto grid max-w-7xl gap-6 lg:grid-cols-[20rem_minmax(0,1fr)]">
+        <aside className="flex flex-col rounded-3xl border border-white/80 bg-white/75 p-4 shadow-soft backdrop-blur lg:sticky lg:top-6 lg:h-[calc(100vh-3rem)]">
+          <div className="flex items-center gap-3">
+            <div className="flex size-10 shrink-0 items-center justify-center rounded-2xl bg-ink text-white">
+              <FileSearch className="size-5" />
             </div>
-            <div>
-              <p className="text-sm font-semibold uppercase tracking-[0.18em] text-xen-indigo">
-                Intelligent Document Processing
+            <div className="min-w-0">
+              <p className="text-xs font-semibold uppercase tracking-[0.16em] text-xen-indigo">
+                Document processing
               </p>
-              <h1 className="mt-2 text-3xl font-semibold tracking-tight text-ink sm:text-4xl">
-                AI Document Analyzer
+              <h1 className="truncate text-base font-semibold text-ink">
+                Intelligence Workspace
               </h1>
-              <p className="mt-2 max-w-2xl text-sm leading-6 text-slate-600 sm:text-base">
-                Upload a PDF or paste text, then stream a business-ready analysis with
-                summaries, key points, risk signals, and persistent document Q&A.
-              </p>
             </div>
           </div>
 
-          <div className="grid grid-cols-3 gap-2 text-center text-xs text-slate-600 sm:min-w-80">
-            <StatusPill icon={<ShieldCheck className="size-4" />} label="Secure intake" />
-            <StatusPill icon={<Workflow className="size-4" />} label="Workflow ready" />
-            <StatusPill icon={<Bot className="size-4" />} label="LLM streaming" />
-          </div>
-        </header>
+          <button
+            className="mt-5 inline-flex w-full items-center justify-center gap-2 rounded-full bg-ink px-4 py-3 text-sm font-semibold text-white transition hover:bg-slate-800"
+            onClick={() => createAndActivateChat()}
+            type="button"
+          >
+            <Plus className="size-4" />
+            New Document
+          </button>
 
-        <div className="grid gap-6 lg:grid-cols-[minmax(0,0.9fr)_minmax(0,1.1fr)]">
-          <section className="flex flex-col rounded-3xl border border-white/80 bg-white p-5 shadow-soft lg:h-[36rem]">
-            <div className="flex items-center justify-between gap-3">
-              <div>
-                <h2 className="text-lg font-semibold text-ink">Document intake</h2>
-                <p className="mt-1 text-sm text-slate-600">
-                  Start with PDF upload or paste raw text from a contract, invoice, or policy.
+          <div className="mt-5 flex items-center gap-2 text-sm font-semibold text-ink">
+            <Clock className="size-4 text-xen-indigo" />
+            Recent documents
+          </div>
+
+          <div className="relative mt-3">
+            <Search className="pointer-events-none absolute left-3 top-1/2 size-4 -translate-y-1/2 text-slate-400" />
+            <input
+              className="h-10 w-full rounded-full border border-slate-200 bg-slate-50 pl-9 pr-3 text-sm text-ink outline-none transition focus:border-xen-indigo focus:bg-white focus:ring-4 focus:ring-indigo-100"
+              onChange={(event) => setChatSearch(event.target.value)}
+              placeholder="Search documents"
+              value={chatSearch}
+            />
+          </div>
+
+          <div className="mt-3 min-h-0 flex-1 space-y-2 overflow-y-auto pr-1">
+            {filteredChats.length ? (
+              filteredChats.map((chat) => (
+                <div
+                  className={`rounded-2xl border p-3 transition ${
+                    chat.id === activeChatId
+                      ? "border-xen-indigo bg-indigo-50"
+                      : "border-slate-200 bg-white hover:border-indigo-200"
+                  }`}
+                  key={chat.id}
+                >
+                  {renamingChatId === chat.id ? (
+                    <form
+                      className="space-y-2"
+                      onSubmit={(event) => {
+                        event.preventDefault();
+                        saveRename(chat.id);
+                      }}
+                    >
+                      <input
+                        autoFocus
+                        className="h-10 w-full rounded-xl border border-indigo-200 bg-white px-3 text-sm font-semibold text-ink outline-none focus:border-xen-indigo focus:ring-4 focus:ring-indigo-100"
+                        onChange={(event) => setRenameDraft(event.target.value)}
+                        onKeyDown={(event) => {
+                          if (event.key === "Escape") {
+                            cancelRename();
+                          }
+                        }}
+                        value={renameDraft}
+                      />
+                      <div className="flex justify-end gap-2">
+                        <button
+                          className="rounded-full px-3 py-1.5 text-xs font-semibold text-slate-500 transition hover:bg-slate-100 hover:text-ink"
+                          onClick={cancelRename}
+                          type="button"
+                        >
+                          Cancel
+                        </button>
+                        <button
+                          className="rounded-full bg-ink px-3 py-1.5 text-xs font-semibold text-white transition hover:bg-slate-800"
+                          type="submit"
+                        >
+                          Save
+                        </button>
+                      </div>
+                    </form>
+                  ) : (
+                    <>
+                      <div className="flex items-start gap-2">
+                        <button
+                          className="min-w-0 flex-1 text-left"
+                          onClick={() => selectChat(chat)}
+                          type="button"
+                        >
+                          <span className="flex items-center gap-2">
+                            <span className="block min-w-0 flex-1 truncate text-sm font-semibold text-ink">
+                              {getChatDocumentLabel(chat)}
+                            </span>
+                            <span className="shrink-0 text-[0.7rem] font-medium text-slate-500">
+                              {formatRelativeTime(chat.updatedAt)}
+                            </span>
+                          </span>
+                          <span className="mt-1 block truncate text-xs text-slate-500">
+                            {getChatPreview(chat)}
+                          </span>
+                        </button>
+                        <button
+                          aria-expanded={openChatMenuId === chat.id}
+                          aria-label={`Open options for ${getChatDocumentLabel(chat)}`}
+                          className="rounded-full p-2 text-slate-400 transition hover:bg-white hover:text-ink"
+                          onClick={() => toggleChatMenu(chat.id)}
+                          type="button"
+                        >
+                          <MoreHorizontal className="size-4" />
+                        </button>
+                      </div>
+
+                      {openChatMenuId === chat.id ? (
+                        <div className="mt-3 grid grid-cols-2 gap-2 border-t border-slate-200 pt-3">
+                          <button
+                            className="inline-flex items-center justify-center gap-1.5 rounded-full border border-slate-200 bg-white px-3 py-1.5 text-xs font-semibold text-ink transition hover:border-xen-indigo hover:text-xen-indigo"
+                            onClick={() => startRenamingChat(chat)}
+                            type="button"
+                          >
+                            <Pencil className="size-3.5" />
+                            Rename
+                          </button>
+                          <button
+                            className="inline-flex items-center justify-center gap-1.5 rounded-full border border-rose-100 bg-white px-3 py-1.5 text-xs font-semibold text-rose-600 transition hover:border-rose-200 hover:bg-rose-50"
+                            onClick={() => deleteChat(chat.id)}
+                            type="button"
+                          >
+                            <Trash2 className="size-3.5" />
+                            Delete
+                          </button>
+                        </div>
+                      ) : null}
+                    </>
+                  )}
+                </div>
+              ))
+            ) : (
+              <div className="flex min-h-52 flex-col items-center justify-center rounded-2xl border border-dashed border-slate-200 bg-slate-50 p-4 text-center">
+                <FileText className="size-8 text-slate-300" />
+                <p className="mt-3 text-sm font-semibold text-ink">
+                  {chatSearch.trim() ? "No matching documents" : "No recent documents yet"}
+                </p>
+                <p className="mt-1 text-xs leading-5 text-slate-500">
+                  {chatSearch.trim()
+                    ? "Try searching by document name or saved activity."
+                    : "Your recent documents will appear here after you load or work on them."}
                 </p>
               </div>
-              <FileText className="size-6 text-xen-indigo" />
-            </div>
-
-            <div className="mt-5 grid grid-cols-2 rounded-full bg-slate-100 p-1">
-              <button
-                className={modeButtonClass(intakeMode === "upload")}
-                onClick={() => setIntakeMode("upload")}
-                type="button"
-              >
-                Upload PDF
-              </button>
-              <button
-                className={modeButtonClass(intakeMode === "paste")}
-                onClick={() => setIntakeMode("paste")}
-                type="button"
-              >
-                Paste text
-              </button>
-            </div>
-
-            {intakeMode === "upload" ? (
-              <div className="mt-5">
-                <button
-                  className="flex min-h-44 w-full flex-col items-center justify-center rounded-2xl border border-dashed border-indigo-300 bg-indigo-50/60 p-6 text-center transition hover:border-xen-indigo hover:bg-indigo-50"
-                  disabled={isExtracting}
-                  onClick={() => fileInputRef.current?.click()}
-                  type="button"
-                >
-                  {isExtracting ? (
-                    <Loader2 className="size-8 animate-spin text-xen-indigo" />
-                  ) : (
-                    <Upload className="size-8 text-xen-indigo" />
-                  )}
-                  <span className="mt-3 font-semibold text-ink">
-                    {isExtracting ? "Extracting document text" : "Choose a PDF, TXT, or Markdown file"}
-                  </span>
-                  <span className="mt-1 text-sm text-slate-600">Maximum 8 MB</span>
-                </button>
-                <input
-                  ref={fileInputRef}
-                  accept=".pdf,.txt,.md,application/pdf,text/plain,text/markdown"
-                  className="hidden"
-                  onChange={handleFileChange}
-                  type="file"
-                />
-              </div>
-            ) : (
-              <textarea
-                className="mt-5 min-h-56 w-full resize-y rounded-2xl border border-slate-200 bg-slate-50 p-4 text-sm leading-6 text-ink outline-none transition focus:border-xen-indigo focus:bg-white focus:ring-4 focus:ring-indigo-100"
-                onChange={(event) => handlePastedDocument(event.target.value)}
-                placeholder="Paste document text here..."
-                value={documentText}
-              />
             )}
+          </div>
 
-            <div className="mt-5 rounded-2xl bg-slate-50 p-4">
-              <div className="flex items-center justify-between gap-3">
-                <div className="min-w-0">
-                  <p className="truncate text-sm font-semibold text-ink">{documentName}</p>
+          <div className="mt-4 border-t border-slate-200 pt-4">
+            <button
+              className="inline-flex w-full items-center justify-center gap-2 rounded-full border border-slate-200 bg-white/80 px-4 py-2 text-sm font-semibold text-ink shadow-sm transition hover:border-xen-indigo hover:text-xen-indigo"
+              onClick={() => setThemeMode((current) => (current === "dark" ? "light" : "dark"))}
+              type="button"
+            >
+              {isDarkTheme ? <Sun className="size-4" /> : <Moon className="size-4" />}
+              {isDarkTheme ? "Light theme" : "Dark theme"}
+            </button>
+          </div>
+        </aside>
+
+        <section className="min-w-0 space-y-6">
+          <header className="rounded-3xl border border-white/80 bg-white/75 p-5 shadow-soft backdrop-blur">
+            <div className="flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">
+              <div>
+                <p className="text-sm font-semibold uppercase tracking-[0.18em] text-xen-indigo">
+                  Intelligent Document Processing
+                </p>
+                <h2 className="mt-2 text-2xl font-semibold tracking-tight text-ink sm:text-3xl">
+                  Document Intelligence Workspace
+                </h2>
+                <p className="mt-2 max-w-2xl text-sm leading-6 text-slate-600">
+                  A focused workflow for intake, structured review and saved document activity.
+                </p>
+              </div>
+
+              <div className="grid grid-cols-3 gap-2 text-center text-xs text-slate-600 lg:min-w-80">
+                <StatusPill icon={<ShieldCheck className="size-4" />} label="Secure intake" />
+                <StatusPill icon={<Workflow className="size-4" />} label="Review workflow" />
+                <StatusPill icon={<FileText className="size-4" />} label="Live processing" />
+              </div>
+            </div>
+          </header>
+
+          <section className="rounded-3xl border border-white/80 bg-white p-5 shadow-soft">
+            <div className="grid gap-6 lg:grid-cols-[minmax(0,1fr)_18rem]">
+              <div>
+                <div className="flex items-center justify-between gap-3">
+                  <div>
+                    <h2 className="text-lg font-semibold text-ink">Document intake</h2>
+                    <p className="mt-1 text-sm text-slate-600">
+                      Upload one or more files, or paste raw text from a contract, invoice, or policy.
+                    </p>
+                  </div>
+                  <FileText className="size-6 shrink-0 text-xen-indigo" />
+                </div>
+
+                <div className="mt-5 grid grid-cols-2 rounded-full bg-slate-100 p-1">
+                  <button
+                    className={modeButtonClass(intakeMode === "upload")}
+                    onClick={() => setIntakeMode("upload")}
+                    type="button"
+                  >
+                    Upload files
+                  </button>
+                  <button
+                    className={modeButtonClass(intakeMode === "paste")}
+                    onClick={() => setIntakeMode("paste")}
+                    type="button"
+                  >
+                    Paste text
+                  </button>
+                </div>
+
+                {intakeMode === "upload" ? (
+                  <div className="mt-5">
+                    <button
+                      className="flex min-h-44 w-full flex-col items-center justify-center rounded-2xl border border-dashed border-indigo-300 bg-indigo-50/60 p-6 text-center transition hover:border-xen-indigo hover:bg-indigo-50"
+                      disabled={isExtracting}
+                      onClick={() => fileInputRef.current?.click()}
+                      type="button"
+                    >
+                      {isExtracting ? (
+                        <Loader2 className="size-8 animate-spin text-xen-indigo" />
+                      ) : (
+                        <Upload className="size-8 text-xen-indigo" />
+                      )}
+                      <span className="mt-3 font-semibold text-ink">
+                        {isExtracting ? "Extracting document text" : "Choose PDF, TXT, or Markdown files"}
+                      </span>
+                      <span className="mt-1 text-sm text-slate-600">Up to 5 files, 8 MB each</span>
+                    </button>
+                    <input
+                      ref={fileInputRef}
+                      accept=".pdf,.txt,.md,application/pdf,text/plain,text/markdown"
+                      className="hidden"
+                      multiple
+                      onChange={handleFileChange}
+                      type="file"
+                    />
+                  </div>
+                ) : (
+                  <textarea
+                    className="mt-5 min-h-56 w-full resize-y rounded-2xl border border-slate-200 bg-slate-50 p-4 text-sm leading-6 text-ink outline-none transition focus:border-xen-indigo focus:bg-white focus:ring-4 focus:ring-indigo-100"
+                    onChange={(event) => handlePastedDocument(event.target.value)}
+                    placeholder="Paste document text here..."
+                    value={documentText}
+                  />
+                )}
+              </div>
+
+              <div className="flex flex-col justify-between rounded-2xl bg-slate-50 p-4">
+                <div>
+                  <p className="text-xs font-semibold uppercase tracking-[0.14em] text-slate-500">
+                    Current document
+                  </p>
+                  <p className="mt-2 truncate text-sm font-semibold text-ink">{documentName}</p>
                   <p className="mt-1 text-xs text-slate-500">
-                    {documentText.trim()
+                    {hasDocument
                       ? `${documentText.trim().length.toLocaleString()} characters ready`
                       : "No text extracted yet"}
                   </p>
                 </div>
-                {documentText.trim() ? (
-                  <CheckCircle2 className="size-5 shrink-0 text-emerald-600" />
-                ) : null}
-              </div>
-            </div>
 
-            {error ? (
-              <div className="mt-4 flex gap-3 rounded-2xl border border-rose-200 bg-rose-50 p-4 text-sm text-rose-700">
-                <AlertCircle className="mt-0.5 size-5 shrink-0" />
-                <p>{error}</p>
-              </div>
-            ) : null}
-
-            <div className="mt-5 grid gap-3 sm:grid-cols-[1fr_auto]">
-              <button
-                className="inline-flex items-center justify-center gap-2 rounded-full bg-ink px-5 py-3 text-sm font-semibold text-white shadow-lg shadow-slate-900/10 transition hover:bg-slate-800 disabled:cursor-not-allowed disabled:opacity-50"
-                disabled={isAnalyzing || isExtracting || !documentText.trim()}
-                onClick={handleAnalyze}
-                type="button"
-              >
-                {isAnalyzing ? <Loader2 className="size-4 animate-spin" /> : <Sparkles className="size-4" />}
-                Analyze document
-              </button>
-              <button
-                className="rounded-full border border-slate-200 px-5 py-3 text-sm font-semibold text-ink transition hover:border-xen-indigo hover:text-xen-indigo"
-                onClick={loadSample}
-                type="button"
-              >
-                Load sample
-              </button>
-            </div>
-          </section>
-
-          <section className="flex flex-col rounded-3xl border border-white/80 bg-white p-5 shadow-soft lg:h-[36rem]">
-            <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
-              <div>
-                <h2 className="text-lg font-semibold text-ink">Analysis workspace</h2>
-                <p className="mt-1 text-sm text-slate-600">
-                  Results stream in as the LLM works through the document.
-                </p>
-              </div>
-              <div className="flex w-full items-center justify-between gap-2 rounded-full bg-slate-100 p-1.5 sm:w-auto">
-                <span className="px-3 text-sm font-medium text-slate-700">
-                  {completionScore}/3 sections ready
-                </span>
-                <button
-                  className="inline-flex items-center justify-center gap-2 rounded-full bg-white px-3 py-1.5 text-sm font-semibold text-ink shadow-sm transition hover:text-xen-indigo disabled:cursor-not-allowed disabled:opacity-50"
-                  disabled={!hasAnalysis || isAnalyzing}
-                  onClick={exportAnalysis}
-                  type="button"
-                >
-                  <Download className="size-4" />
-                  Export PDF
-                </button>
-              </div>
-            </div>
-
-            <div className="mt-5 grid gap-3 sm:grid-cols-3">
-              {tabs.map((tab) => (
-                <button
-                  className={`rounded-2xl border p-4 text-left transition ${
-                    activeTab === tab.id
-                      ? "border-xen-indigo bg-indigo-50 text-ink"
-                      : "border-slate-200 bg-white text-slate-600 hover:border-indigo-200"
-                  }`}
-                  key={tab.id}
-                  onClick={() => setActiveTab(tab.id)}
-                  type="button"
-                >
-                  <span className="block text-sm font-semibold">{tab.label}</span>
-                  <span className="mt-1 block text-xs leading-5">{tab.helper}</span>
-                </button>
-              ))}
-            </div>
-
-            <article className="mt-5 h-72 overflow-y-auto rounded-3xl border border-slate-200 bg-slate-50 p-5 lg:h-auto lg:min-h-0 lg:flex-1">
-              <div className="flex items-center justify-between gap-3">
-                <h3 className="font-semibold text-ink">{currentTab.label}</h3>
-                {isAnalyzing ? (
-                  <span className="inline-flex items-center gap-2 rounded-full bg-white px-3 py-1 text-xs font-semibold text-xen-indigo">
-                    <Loader2 className="size-3.5 animate-spin" />
-                    Streaming
-                  </span>
-                ) : null}
-              </div>
-
-              <div className="mt-4 text-sm leading-7 text-slate-700">
-                {activeTab === "summary" ? (
-                  <p className="whitespace-pre-wrap">
-                    {currentContent || emptyResultText(isAnalyzing)}
-                  </p>
-                ) : (
-                  <BulletList content={currentContent} isLoading={isAnalyzing} />
-                )}
-              </div>
-            </article>
-          </section>
-        </div>
-
-        <section className="grid gap-6 lg:grid-cols-[18rem_minmax(0,1fr)]">
-          <aside className="flex flex-col rounded-3xl border border-white/80 bg-white p-4 shadow-soft lg:h-[36rem]">
-            <button
-              className="inline-flex w-full items-center justify-center gap-2 rounded-full bg-ink px-4 py-3 text-sm font-semibold text-white transition hover:bg-slate-800"
-              onClick={() => createAndActivateChat()}
-              type="button"
-            >
-              <Plus className="size-4" />
-              New Document
-            </button>
-
-            <div className="mt-5 flex items-center gap-2 text-sm font-semibold text-ink">
-              <Clock className="size-4 text-xen-indigo" />
-              Recent documents
-            </div>
-
-            <div className="relative mt-3">
-              <Search className="pointer-events-none absolute left-3 top-1/2 size-4 -translate-y-1/2 text-slate-400" />
-              <input
-                className="h-10 w-full rounded-full border border-slate-200 bg-slate-50 pl-9 pr-3 text-sm text-ink outline-none transition focus:border-xen-indigo focus:bg-white focus:ring-4 focus:ring-indigo-100"
-                onChange={(event) => setChatSearch(event.target.value)}
-                placeholder="Search documents"
-                value={chatSearch}
-              />
-            </div>
-
-            <div className="mt-3 min-h-0 flex-1 space-y-2 overflow-y-auto pr-1">
-              {filteredChats.length ? (
-                filteredChats.map((chat) => (
-                  <div
-                    className={`rounded-2xl border p-3 transition ${
-                      chat.id === activeChatId
-                        ? "border-xen-indigo bg-indigo-50"
-                        : "border-slate-200 bg-white hover:border-indigo-200"
-                    }`}
-                    key={chat.id}
-                  >
-                    {renamingChatId === chat.id ? (
-                      <form
-                        className="space-y-2"
-                        onSubmit={(event) => {
-                          event.preventDefault();
-                          saveRename(chat.id);
-                        }}
-                      >
-                        <input
-                          autoFocus
-                          className="h-10 w-full rounded-xl border border-indigo-200 bg-white px-3 text-sm font-semibold text-ink outline-none focus:border-xen-indigo focus:ring-4 focus:ring-indigo-100"
-                          onChange={(event) => setRenameDraft(event.target.value)}
-                          onKeyDown={(event) => {
-                            if (event.key === "Escape") {
-                              cancelRename();
-                            }
-                          }}
-                          value={renameDraft}
-                        />
-                        <div className="flex justify-end gap-2">
-                          <button
-                            className="rounded-full px-3 py-1.5 text-xs font-semibold text-slate-500 transition hover:bg-slate-100 hover:text-ink"
-                            onClick={cancelRename}
-                            type="button"
-                          >
-                            Cancel
-                          </button>
-                          <button
-                            className="rounded-full bg-ink px-3 py-1.5 text-xs font-semibold text-white transition hover:bg-slate-800"
-                            type="submit"
-                          >
-                            Save
-                          </button>
-                        </div>
-                      </form>
-                    ) : (
-                      <>
-                        <div className="flex items-start gap-2">
-                          <button
-                            className="min-w-0 flex-1 text-left"
-                            onClick={() => selectChat(chat)}
-                            type="button"
-                          >
-                            <span className="flex items-center gap-2">
-                              <span className="block min-w-0 flex-1 truncate text-sm font-semibold text-ink">
-                                {getChatDocumentLabel(chat)}
-                              </span>
-                              <span className="shrink-0 text-[0.7rem] font-medium text-slate-500">
-                                {formatRelativeTime(chat.updatedAt)}
-                              </span>
-                            </span>
-                            <span className="mt-1 block truncate text-xs text-slate-500">
-                              {getChatPreview(chat)}
-                            </span>
-                          </button>
-                          <button
-                            aria-expanded={openChatMenuId === chat.id}
-                            aria-label={`Open options for ${getChatDocumentLabel(chat)}`}
-                            className="rounded-full p-2 text-slate-400 transition hover:bg-white hover:text-ink"
-                            onClick={() => toggleChatMenu(chat.id)}
-                            type="button"
-                          >
-                            <MoreHorizontal className="size-4" />
-                          </button>
-                        </div>
-
-                        {openChatMenuId === chat.id ? (
-                          <div className="mt-3 grid grid-cols-2 gap-2 border-t border-slate-200 pt-3">
-                            <button
-                              className="inline-flex items-center justify-center gap-1.5 rounded-full border border-slate-200 bg-white px-3 py-1.5 text-xs font-semibold text-ink transition hover:border-xen-indigo hover:text-xen-indigo"
-                              onClick={() => startRenamingChat(chat)}
-                              type="button"
-                            >
-                              <Pencil className="size-3.5" />
-                              Rename
-                            </button>
-                            <button
-                              className="inline-flex items-center justify-center gap-1.5 rounded-full border border-rose-100 bg-white px-3 py-1.5 text-xs font-semibold text-rose-600 transition hover:border-rose-200 hover:bg-rose-50"
-                              onClick={() => deleteChat(chat.id)}
-                              type="button"
-                            >
-                              <Trash2 className="size-3.5" />
-                              Delete
-                            </button>
-                          </div>
-                        ) : null}
-                      </>
-                    )}
+                {error ? (
+                  <div className="mt-4 flex gap-3 rounded-2xl border border-rose-200 bg-rose-50 p-3 text-sm text-rose-700">
+                    <AlertCircle className="mt-0.5 size-5 shrink-0" />
+                    <p>{error}</p>
                   </div>
-                ))
-              ) : (
-                <div className="flex min-h-52 flex-col items-center justify-center rounded-2xl border border-dashed border-slate-200 bg-slate-50 p-4 text-center">
-                  <FileText className="size-8 text-slate-300" />
-                  <p className="mt-3 text-sm font-semibold text-ink">
-                    {chatSearch.trim() ? "No matching documents" : "No recent documents yet"}
-                  </p>
-                  <p className="mt-1 text-xs leading-5 text-slate-500">
-                    {chatSearch.trim()
-                      ? "Try searching by document name or question."
-                      : "Your recent documents will appear here after you load or ask about them."}
-                  </p>
-                </div>
-              )}
-            </div>
-          </aside>
+                ) : null}
 
-          <section className="flex flex-col rounded-3xl border border-white/80 bg-white p-5 shadow-soft lg:h-[36rem]">
-            <div className="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
-              <div className="flex items-start gap-3">
-                <div className="flex size-10 shrink-0 items-center justify-center rounded-2xl bg-xen-purple text-white">
-                  <MessageSquareText className="size-5" />
-                </div>
-                <div>
-                  <h2 className="font-semibold text-ink">Ask the document</h2>
-                  <p className="mt-1 text-sm text-slate-600">
-                    Ask follow-up questions about the active document.
-                  </p>
-                  <p className="mt-2 text-xs font-medium text-slate-500">
-                    Active document: {documentName}
-                    {activeChat?.messages.length
-                      ? ` / ${activeChat.messages.length} messages`
-                      : ""}
-                  </p>
-                </div>
+                <button
+                  className="mt-5 inline-flex w-full items-center justify-center gap-2 rounded-full bg-ink px-5 py-3 text-sm font-semibold text-white shadow-lg shadow-slate-900/10 transition hover:bg-slate-800 disabled:cursor-not-allowed disabled:opacity-50"
+                  disabled={isAnalyzing || isExtracting || !hasDocument}
+                  onClick={handleAnalyze}
+                  type="button"
+                >
+                  {isAnalyzing ? <Loader2 className="size-4 animate-spin" /> : <Workflow className="size-4" />}
+                  Process documents
+                </button>
               </div>
-              <button
-                className="inline-flex items-center justify-center gap-2 rounded-full border border-slate-200 px-3 py-2 text-sm font-semibold text-ink transition hover:border-xen-indigo hover:text-xen-indigo disabled:cursor-not-allowed disabled:opacity-50"
-                disabled={!hasChatMessages || isAnswering}
-                onClick={exportChat}
-                type="button"
-              >
-                <Download className="size-4" />
-                Export PDF
-              </button>
             </div>
+          </section>
 
-            <div className="mt-5 min-h-0 flex-1 overflow-y-auto rounded-3xl border border-slate-200 bg-slate-50 p-4">
-              {activeChat?.messages.length ? (
-                <div className="space-y-4">
-                  {activeChat.messages.map((message) => (
-                    <ChatBubble key={message.id} message={message} />
+          {!hasDocument ? (
+            <section className="rounded-3xl border border-dashed border-slate-200 bg-white/60 p-8 text-center shadow-soft">
+              <div className="mx-auto flex size-12 items-center justify-center rounded-2xl bg-slate-50 text-xen-indigo">
+                <FileSearch className="size-6" />
+              </div>
+              <h2 className="mt-4 text-lg font-semibold text-ink">Start with document intake</h2>
+              <p className="mx-auto mt-2 max-w-xl text-sm leading-6 text-slate-600">
+                Review and saved activity stay hidden until a document is loaded, keeping the workspace focused.
+              </p>
+            </section>
+          ) : (
+            <>
+              <section className="flex flex-col rounded-3xl border border-white/80 bg-white p-5 shadow-soft lg:h-[36rem]">
+                <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
+                  <div>
+                    <h2 className="text-lg font-semibold text-ink">Review workspace</h2>
+                    <p className="mt-1 text-sm text-slate-600">
+                      Structured findings appear as the document set is processed.
+                    </p>
+                  </div>
+                  <div className="flex w-full items-center justify-between gap-2 rounded-full bg-slate-100 p-1.5 sm:w-auto">
+                    <span className="px-3 text-sm font-medium text-slate-700">
+                      {completionScore}/3 sections ready
+                    </span>
+                    <button
+                      className="inline-flex items-center justify-center gap-2 rounded-full bg-white px-3 py-1.5 text-sm font-semibold text-ink shadow-sm transition hover:text-xen-indigo disabled:cursor-not-allowed disabled:opacity-50"
+                      disabled={!hasAnalysis || isAnalyzing}
+                      onClick={exportAnalysis}
+                      type="button"
+                    >
+                      <Download className="size-4" />
+                      Export PDF
+                    </button>
+                  </div>
+                </div>
+
+                <div className="mt-5 grid gap-3 sm:grid-cols-3">
+                  {tabs.map((tab) => (
+                    <button
+                      className={`rounded-2xl border p-4 text-left transition ${
+                        activeTab === tab.id
+                          ? "border-xen-indigo bg-indigo-50 text-ink"
+                          : "border-slate-200 bg-white text-slate-600 hover:border-indigo-200"
+                      }`}
+                      key={tab.id}
+                      onClick={() => setActiveTab(tab.id)}
+                      type="button"
+                    >
+                      <span className="block text-sm font-semibold">{tab.label}</span>
+                      <span className="mt-1 block text-xs leading-5">{tab.helper}</span>
+                    </button>
                   ))}
                 </div>
-              ) : (
-                <div className="flex min-h-72 flex-col items-center justify-center text-center">
-                  <div className="flex size-12 items-center justify-center rounded-2xl bg-white text-xen-indigo shadow-sm">
-                    <MessageCircle className="size-6" />
-                  </div>
-                  <h3 className="mt-4 font-semibold text-ink">
-                    No questions for this document yet
-                  </h3>
-                  <p className="mt-2 max-w-md text-sm leading-6 text-slate-600">
-                    Load or paste a document, then ask a question. The full conversation
-                    will stay here and in Recent documents.
-                  </p>
-                </div>
-              )}
-            </div>
 
-            <form className="mt-4 flex flex-col gap-3 sm:flex-row" onSubmit={handleQuestion}>
-              <input
-                className="min-h-12 flex-1 rounded-full border border-slate-200 bg-slate-50 px-4 text-sm text-ink outline-none transition focus:border-xen-indigo focus:bg-white focus:ring-4 focus:ring-indigo-100"
-                onChange={(event) => setQuestion(event.target.value)}
-                placeholder="Example: What risks should the finance team review?"
-                value={question}
-              />
-              <button
-                className="inline-flex items-center justify-center gap-2 rounded-full bg-xen-indigo px-5 py-3 text-sm font-semibold text-white transition hover:bg-indigo-700 disabled:cursor-not-allowed disabled:opacity-50"
-                disabled={isAnswering || !documentText.trim()}
-                type="submit"
-              >
-                {isAnswering ? <Loader2 className="size-4 animate-spin" /> : <ArrowRight className="size-4" />}
-                Send
-              </button>
-            </form>
-          </section>
+                <article className="mt-5 h-72 overflow-y-auto rounded-3xl border border-slate-200 bg-slate-50 p-5 lg:h-auto lg:min-h-0 lg:flex-1">
+                  <div className="flex items-center justify-between gap-3">
+                    <h3 className="font-semibold text-ink">{currentTab.label}</h3>
+                    {isAnalyzing ? (
+                      <span className="inline-flex items-center gap-2 rounded-full bg-white px-3 py-1 text-xs font-semibold text-xen-indigo">
+                        <Loader2 className="size-3.5 animate-spin" />
+                        Processing
+                      </span>
+                    ) : null}
+                  </div>
+
+                  <div className="mt-4 text-sm leading-7 text-slate-700">
+                    {activeTab === "summary" ? (
+                      currentContent ? (
+                        <p className="fade-in-up whitespace-pre-wrap">
+                          {currentContent}
+                          {isAnalyzing ? <StreamingCursor /> : null}
+                        </p>
+                      ) : isAnalyzing ? (
+                        <SkeletonLines />
+                      ) : (
+                        <p>{emptyResultText(false)}</p>
+                      )
+                    ) : (
+                      <BulletList content={currentContent} isLoading={isAnalyzing} />
+                    )}
+                  </div>
+                </article>
+              </section>
+
+              <section className="flex flex-col rounded-3xl border border-white/80 bg-white p-5 shadow-soft lg:h-[34rem]">
+                <div className="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
+                  <div className="flex items-start gap-3">
+                    <div className="flex size-10 shrink-0 items-center justify-center rounded-2xl bg-xen-purple text-white">
+                      <MessageSquareText className="size-5" />
+                    </div>
+                    <div>
+                      <h2 className="font-semibold text-ink">Document review</h2>
+                      <p className="mt-1 text-sm text-slate-600">
+                        Explore the active document with contextual prompts.
+                      </p>
+                      <p className="mt-2 text-xs font-medium text-slate-500">
+                        Active document: {documentName}
+                        {activeChat?.messages.length
+                          ? ` / ${activeChat.messages.length} saved items`
+                          : ""}
+                      </p>
+                    </div>
+                  </div>
+                  <button
+                    className="inline-flex items-center justify-center gap-2 rounded-full border border-slate-200 px-3 py-2 text-sm font-semibold text-ink transition hover:border-xen-indigo hover:text-xen-indigo disabled:cursor-not-allowed disabled:opacity-50"
+                    disabled={!hasChatMessages || isAnswering}
+                    onClick={exportChat}
+                    type="button"
+                  >
+                    <Download className="size-4" />
+                    Export PDF
+                  </button>
+                </div>
+
+                <div
+                  className="mt-5 min-h-0 flex-1 overflow-y-auto rounded-3xl border border-slate-200 bg-slate-50 p-4"
+                  ref={documentWorkspaceRef}
+                >
+                  {activeChat?.messages.length ? (
+                    <div className="space-y-4">
+                      {activeChat.messages.map((message, index) => (
+                        <ChatBubble
+                          isStreaming={
+                            isAnswering &&
+                            message.role === "assistant" &&
+                            index === activeChat.messages.length - 1
+                          }
+                          key={message.id}
+                          message={message}
+                        />
+                      ))}
+                    </div>
+                  ) : (
+                    <div className="flex min-h-72 flex-col items-center justify-center text-center">
+                      <div className="flex size-12 items-center justify-center rounded-2xl bg-white text-xen-indigo shadow-sm">
+                        <MessageCircle className="size-6" />
+                      </div>
+                      <h3 className="mt-4 font-semibold text-ink">
+                        No saved activity for this document yet
+                      </h3>
+                      <p className="mt-2 max-w-md text-sm leading-6 text-slate-600">
+                        Load or paste a document, then explore it below. Saved activity stays
+                        with this document.
+                      </p>
+                    </div>
+                  )}
+                </div>
+
+                <form className="mt-4 flex flex-col gap-3 sm:flex-row" onSubmit={handleQuestion}>
+                  <input
+                    className="min-h-12 flex-1 rounded-full border border-slate-200 bg-slate-50 px-4 text-sm text-ink outline-none transition focus:border-xen-indigo focus:bg-white focus:ring-4 focus:ring-indigo-100"
+                    onChange={(event) => setQuestion(event.target.value)}
+                    placeholder="Add a follow-up prompt, e.g. flag payment or compliance risks"
+                    value={question}
+                  />
+                  <button
+                    className="inline-flex items-center justify-center gap-2 rounded-full bg-xen-indigo px-5 py-3 text-sm font-semibold text-white transition hover:bg-indigo-700 disabled:cursor-not-allowed disabled:opacity-50"
+                    disabled={isAnswering || !hasDocument}
+                    type="submit"
+                  >
+                    {isAnswering ? <Loader2 className="size-4 animate-spin" /> : <ArrowRight className="size-4" />}
+                    Send
+                  </button>
+                </form>
+              </section>
+            </>
+          )}
         </section>
       </section>
     </main>
@@ -910,29 +989,53 @@ function BulletList({ content, isLoading }: { content: string; isLoading: boolea
   const bullets = normalizeBullets(content);
 
   if (!bullets.length) {
-    return <p>{emptyResultText(isLoading)}</p>;
+    return isLoading ? <SkeletonLines /> : <p>{emptyResultText(false)}</p>;
   }
 
   return (
-    <ul className="space-y-3">
-      {bullets.map((bullet) => (
+    <ul className="fade-in-up space-y-3">
+      {bullets.map((bullet, index) => (
         <li className="flex gap-3" key={bullet}>
           <CheckCircle2 className="mt-1 size-4 shrink-0 text-emerald-600" />
-          <span>{bullet}</span>
+          <span>
+            {bullet}
+            {isLoading && index === bullets.length - 1 ? <StreamingCursor /> : null}
+          </span>
         </li>
       ))}
     </ul>
   );
 }
 
-function ChatBubble({ message }: { message: ChatMessage }) {
+function SkeletonLines() {
+  return (
+    <div className="space-y-3" aria-label="Loading content">
+      <div className="skeleton-line w-11/12" />
+      <div className="skeleton-line w-full" />
+      <div className="skeleton-line w-9/12" />
+      <div className="skeleton-line w-7/12" />
+    </div>
+  );
+}
+
+function StreamingCursor() {
+  return <span aria-hidden className="streaming-cursor" />;
+}
+
+function ChatBubble({
+  message,
+  isStreaming,
+}: {
+  message: ChatMessage;
+  isStreaming?: boolean;
+}) {
   const isUser = message.role === "user";
 
   return (
     <div className={`flex gap-3 ${isUser ? "justify-end" : "justify-start"}`}>
       {!isUser ? (
         <div className="flex size-8 shrink-0 items-center justify-center rounded-full bg-xen-purple text-white">
-          <Bot className="size-4" />
+          <MessageSquareText className="size-4" />
         </div>
       ) : null}
       <div
@@ -940,9 +1043,14 @@ function ChatBubble({ message }: { message: ChatMessage }) {
           isUser ? "bg-ink text-white" : "bg-white text-slate-700 shadow-sm"
         }`}
       >
-        <p className="whitespace-pre-wrap">
-          {message.content || "Thinking..."}
-        </p>
+        {message.content ? (
+          <p className="whitespace-pre-wrap">
+            {message.content}
+            {isStreaming ? <StreamingCursor /> : null}
+          </p>
+        ) : (
+          <SkeletonLines />
+        )}
       </div>
       {isUser ? (
         <div className="flex size-8 shrink-0 items-center justify-center rounded-full bg-slate-200 text-ink">
@@ -1012,7 +1120,7 @@ function buildAnalysisExport(
     return "";
   }
 
-  return `# AI Document Analysis
+  return `# Document Intelligence Review
 
 Document: ${documentName}
 Generated: ${generatedAt}
@@ -1045,7 +1153,7 @@ function buildChatExport(chat?: ChatSession) {
     )
     .join("\n\n");
 
-  return `# Document Q&A
+  return `# Document Export
 
 Document: ${chat.documentName}
 Generated: ${generatedAt}
@@ -1079,8 +1187,8 @@ async function downloadPdf(content: string, fileName: string, title: string) {
 
   doc.setProperties({
     title,
-    subject: "AI Document Analyzer export",
-    creator: "AI Document Analyzer",
+    subject: "Document Intelligence Workspace export",
+    creator: "Document Intelligence Workspace",
   });
 
   for (const rawLine of content.split("\n")) {
@@ -1160,10 +1268,10 @@ function getChatPreview(chat: ChatSession) {
   }
 
   if (chat.documentText.trim()) {
-    return "Ready to ask questions";
+    return "Ready for review";
   }
 
-  return "No questions yet";
+  return "Draft document";
 }
 
 function formatRelativeTime(value: string) {
@@ -1220,6 +1328,19 @@ function createChatSession(
     createdAt: now,
     updatedAt: now,
   };
+}
+
+function buildSelectedFilesLabel(files: File[]) {
+  if (files.length === 1) {
+    return files[0].name;
+  }
+
+  const visibleNames = files.slice(0, 2).map((file) => file.name).join(", ");
+  const remainingCount = files.length - 2;
+
+  return remainingCount > 0
+    ? `${files.length} documents: ${visibleNames} +${remainingCount}`
+    : `${files.length} documents: ${visibleNames}`;
 }
 
 function createId() {

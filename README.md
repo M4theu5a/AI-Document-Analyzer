@@ -1,19 +1,19 @@
-# AI Document Analyzer
+# Document Intelligence Workspace
 
 A Xenet-inspired intelligent document processing workspace built with Next.js,
-TypeScript, Tailwind CSS, and DeepSeek-powered AI responses.
+TypeScript, Tailwind CSS, and DeepSeek-backed document review.
 
-The app lets a user upload a PDF or paste document text, then uses an LLM to
-produce:
+The app lets a user upload one or more PDFs/text files or paste document text,
+then produces:
 
 - Summary
 - Key points
 - Risks and action items
-- Free-form Q&A grounded in the document
+- A persistent document workspace for contextual follow-up prompts
 
 ## Why this project
 
-This tech test mirrors a real business use case: AI-assisted processing for
+This tech test mirrors a real business use case: automated processing for
 contracts, invoices, service agreements, and policies. It is intentionally built
 as a small product surface rather than a raw API demo, with loading states,
 error handling, streaming responses, and a responsive dashboard UI.
@@ -58,8 +58,8 @@ Open `http://localhost:3000`.
 
 ## API routes
 
-- `POST /api/extract` receives a PDF, TXT, or Markdown file and extracts text.
-- `POST /api/analyze` streams either the fixed analysis or a Q&A answer.
+- `POST /api/extract` receives up to five PDF, TXT, or Markdown files and extracts text.
+- `POST /api/analyze` streams either the fixed analysis or a contextual response.
 
 ## Deployment
 
