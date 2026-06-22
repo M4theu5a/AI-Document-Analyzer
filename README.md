@@ -32,7 +32,7 @@ error handling, streaming responses, and a responsive dashboard UI.
 Install dependencies:
 
 ```bash
-pnpm install
+bun install
 ```
 
 Create an environment file:
@@ -51,7 +51,7 @@ DEEPSEEK_MODEL=deepseek-v4-flash
 Run the development server:
 
 ```bash
-pnpm dev
+bun dev
 ```
 
 Open `http://localhost:3000`.

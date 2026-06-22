@@ -3,7 +3,51 @@
 @tailwind utilities;
 
 :root {
-  color-scheme: light;
+  --bg: #f9fafb;
+  --panel: #ffffff;
+  --inset: #f5f7f9;
+  --sidebar: #fbfcfd;
+  --border: #e2e4e6;
+  --text: #21242a;
+  --text-muted: #545860;
+  --muted: #787c83;
+  --accent: #2a78c6;
+  --on-accent: #fcfcfc;
+  --danger: #d03d37;
+  --gold: #c07600;
+  --ok: #3f945b;
+  --calm: #267e90;
+  --radius: 16px;
+  --pad: 22px;
+  --gap: 20px;
+  --control-h: 36px;
+  --header-py: 18px;
+  --shadow-card: 0 1px 2px rgba(16, 18, 27, 0.04), 0 4px 16px rgba(16, 18, 27, 0.06);
+}
+
+.dark {
+  --bg: #0c0f14;
+  --panel: #161920;
+  --inset: #1f232a;
+  --sidebar: #090b0f;
+  --border: #2d3139;
+  --text: #e9ebef;
+  --text-muted: #a9acb4;
+  --muted: #82868e;
+  --accent: #509af2;
+  --on-accent: #fcfcfc;
+  --danger: #f46f64;
+  --gold: #eaa950;
+  --ok: #5ebc7b;
+  --calm: #61b9ce;
+  --shadow-card: 0 1px 0 rgba(255, 255, 255, 0.03), 0 0 0 1px rgba(255, 255, 255, 0.04);
+}
+
+[data-density="compact"] {
+  --pad: 16px;
+  --gap: 14px;
+  --control-h: 32px;
+  --header-py: 14px;
 }
 
 * {
@@ -16,14 +60,8 @@ html {
 
 body {
   margin: 0;
-  background:
-    radial-gradient(circle at top left, rgba(255, 241, 190, 0.75), transparent 28rem),
-    radial-gradient(circle at top right, rgba(238, 135, 203, 0.28), transparent 26rem),
-    #f8fafc;
-  color: #171329;
-  font-family:
-    Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI",
-    sans-serif;
+  background: var(--bg);
+  color: var(--text);
 }
 
 button,
@@ -33,114 +71,12 @@ textarea {
 }
 
 ::selection {
-  background: rgba(79, 70, 229, 0.18);
+  background: color-mix(in oklab, var(--accent) 25%, transparent);
 }
 
-.theme-root {
-  position: relative;
-  isolation: isolate;
-  color: #171329;
-  background:
-    radial-gradient(circle at top left, rgba(255, 241, 190, 0.75), transparent 28rem),
-    radial-gradient(circle at top right, rgba(238, 135, 203, 0.28), transparent 26rem),
-    #f8fafc;
-}
-
-.theme-dark {
-  color: #f8f7ff;
-  background:
-    radial-gradient(circle at top left, rgba(79, 70, 229, 0.14), transparent 30rem),
-    radial-gradient(circle at bottom right, rgba(15, 23, 42, 0.48), transparent 34rem),
-    #09081a;
-}
-
-.theme-dark .bg-white,
-.theme-dark .bg-white\/75 {
-  background-color: rgba(255, 255, 255, 0.085) !important;
-}
-
-.theme-dark .bg-white\/80 {
-  background-color: rgba(255, 255, 255, 0.1) !important;
-}
-
-.theme-dark .bg-slate-50,
-.theme-dark .bg-slate-100 {
-  background-color: rgba(255, 255, 255, 0.06) !important;
-}
-
-.theme-dark .bg-indigo-50,
-.theme-dark .bg-indigo-50\/60 {
-  background-color: rgba(104, 91, 255, 0.16) !important;
-}
-
-.theme-dark .bg-slate-200 {
-  background-color: rgba(255, 255, 255, 0.14) !important;
-}
-
-.theme-dark .bg-ink,
-.theme-dark .bg-xen-purple,
-.theme-dark .bg-xen-indigo {
-  background: linear-gradient(135deg, #312e81, #4f46e5) !important;
-}
-
-.theme-dark .border-white\/80,
-.theme-dark .border-slate-200,
-.theme-dark .border-indigo-200,
-.theme-dark .border-indigo-300 {
-  border-color: rgba(255, 255, 255, 0.14) !important;
-}
-
-.theme-dark .border-xen-indigo {
-  border-color: rgba(168, 85, 247, 0.72) !important;
-}
-
-.theme-dark .shadow-soft {
-  box-shadow: 0 18px 48px rgba(0, 0, 0, 0.34);
-}
-
-.theme-dark .text-ink {
-  color: #f8f7ff !important;
-}
-
-.theme-dark .text-slate-700,
-.theme-dark .text-slate-600 {
-  color: rgba(235, 232, 255, 0.74) !important;
-}
-
-.theme-dark .text-slate-500,
-.theme-dark .text-slate-400 {
-  color: rgba(224, 218, 255, 0.56) !important;
-}
-
-.theme-dark .text-xen-indigo {
-  color: #b5a7ff !important;
-}
-
-.theme-dark input,
-.theme-dark textarea {
-  color: #f8f7ff;
-}
-
-.theme-dark input::placeholder,
-.theme-dark textarea::placeholder {
-  color: rgba(224, 218, 255, 0.46);
-}
-
-.theme-dark .hover\:bg-white:hover {
-  background-color: rgba(255, 255, 255, 0.13) !important;
-}
-
-.theme-dark .hover\:bg-slate-100:hover {
-  background-color: rgba(255, 255, 255, 0.1) !important;
-}
-
-.theme-root * {
+* {
   scrollbar-width: thin;
-  scrollbar-color: rgba(79, 70, 229, 0.42) transparent;
-}
-
-.theme-dark * {
-  scrollbar-color: rgba(181, 167, 255, 0.5) transparent;
+  scrollbar-color: color-mix(in oklab, var(--accent) 35%, transparent) transparent;
 }
 
 .skeleton-line {
@@ -148,22 +84,12 @@ textarea {
   border-radius: 9999px;
   background: linear-gradient(
     90deg,
-    rgba(148, 163, 184, 0.16),
-    rgba(148, 163, 184, 0.32),
-    rgba(148, 163, 184, 0.16)
+    color-mix(in oklab, var(--muted) 18%, transparent),
+    color-mix(in oklab, var(--muted) 36%, transparent),
+    color-mix(in oklab, var(--muted) 18%, transparent)
   );
   background-size: 220% 100%;
   animation: skeleton-shimmer 1.4s ease-in-out infinite;
-}
-
-.theme-dark .skeleton-line {
-  background: linear-gradient(
-    90deg,
-    rgba(255, 255, 255, 0.06),
-    rgba(181, 167, 255, 0.22),
-    rgba(255, 255, 255, 0.06)
-  );
-  background-size: 220% 100%;
 }
 
 .streaming-cursor {
@@ -172,10 +98,10 @@ textarea {
   height: 1.05em;
   margin-left: 0.2rem;
   border-radius: 9999px;
-  background: #8b5cf6;
+  background: var(--accent);
   vertical-align: -0.18em;
   animation: cursor-blink 0.9s steps(2, start) infinite;
-  box-shadow: 0 0 18px rgba(139, 92, 246, 0.65);
+  opacity: 0.75;
 }
 
 .fade-in-up {
@@ -186,7 +112,6 @@ textarea {
   from {
     background-position: 220% 0;
   }
-
   to {
     background-position: -220% 0;
   }
@@ -203,7 +128,6 @@ textarea {
     opacity: 0;
     transform: translateY(0.35rem);
   }
-
   to {
     opacity: 1;
     transform: translateY(0);

@@ -6,19 +6,34 @@ const config: Config = {
     "./components/**/*.{js,ts,jsx,tsx,mdx}",
     "./lib/**/*.{js,ts,jsx,tsx,mdx}",
   ],
+  darkMode: "class",
   theme: {
     extend: {
       colors: {
-        ink: "#171329",
-        xen: {
-          purple: "#2a1f5a",
-          indigo: "#4f46e5",
-          rose: "#ee87cb",
-          gold: "#fff1be",
-        },
+        bg: "var(--bg)",
+        panel: "var(--panel)",
+        inset: "var(--inset)",
+        sidebar: "var(--sidebar)",
+        border: "var(--border)",
+        text: "var(--text)",
+        "text-muted": "var(--text-muted)",
+        muted: "var(--muted)",
+        accent: "var(--accent)",
+        "on-accent": "var(--on-accent)",
+        danger: "var(--danger)",
+        gold: "var(--gold)",
+        ok: "var(--ok)",
+        calm: "var(--calm)",
+      },
+      borderRadius: {
+        panel: "var(--radius)",
+      },
+      fontFamily: {
+        sans: ["var(--font-hanken)", "system-ui", "sans-serif"],
+        mono: ["var(--font-jetbrains)", "ui-monospace", "monospace"],
       },
       boxShadow: {
-        soft: "0 18px 60px rgba(23, 19, 41, 0.12)",
+        card: "var(--shadow-card)",
       },
     },
   },
