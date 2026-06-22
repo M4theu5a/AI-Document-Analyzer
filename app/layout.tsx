@@ -2,9 +2,9 @@ import type { Metadata } from "next";
 import "./globals.css";
 
 export const metadata: Metadata = {
-  title: "Document Intelligence Workspace",
+  title: "DocAnalyzer AI - Document Intelligence",
   description:
-    "A document intelligence workspace for summaries, key points and risk signals.",
+    "Intelligent document analysis with AI-powered summaries, key points, and Q&A",
 };
 
 export default function RootLayout({
@@ -14,7 +14,9 @@ export default function RootLayout({
 }>) {
   return (
     <html lang="en">
-      <body>{children}</body>
+      <body className="dark-theme">
+        {children}
+      </body>
     </html>
   );
 }
