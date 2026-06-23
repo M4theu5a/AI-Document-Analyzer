@@ -1,4 +1,5 @@
 import { NextResponse } from "next/server";
+import { getSessionUser } from "@/lib/auth";
 
 export const runtime = "nodejs";
 
@@ -13,6 +14,12 @@ type ExtractedDocument = {
 
 export async function POST(request: Request) {
   try {
+    const user = await getSessionUser();
+
+    if (!user) {
+      return NextResponse.json({ error: "Sign in to upload documents." }, { status: 401 });
+    }
+
     const formData = await request.formData();
     const uploadedFiles = [
       ...formData.getAll("files"),

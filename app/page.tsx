@@ -282,9 +282,9 @@ export default function Home() {
 
   // Soft-auth gate: runs the action if logged in, otherwise stores it and opens
   // the login modal so it can resume after authentication.
-  function requireAuth(action: () => void) {
+  function requireAuth(action?: () => void) {
     if (authedRef.current) return true;
-    pendingActionRef.current = action;
+    pendingActionRef.current = action ?? null;
     setShowAuthModal(true);
     return false;
   }
@@ -310,6 +310,11 @@ export default function Home() {
     if (!files.length) return;
     if (!requireAuth(() => void processFiles(files))) return;
     await processFiles(files);
+  }
+
+  function handleBrowseFiles() {
+    if (!requireAuth()) return;
+    fileInputRef.current?.click();
   }
 
   async function processFiles(files: File[]) {
@@ -472,14 +477,18 @@ export default function Home() {
   }
 
   function handlePastedDocument(nextText: string) {
+    if (!requireAuth(() => handlePastedDocument(nextText))) return;
     setDocumentText(nextText);
     setDocumentName("pasted-document.txt");
     attachDocumentToActiveChat("pasted-document.txt", nextText, [
       { fileName: "pasted-document.txt", text: nextText },
     ]);
     setDraftDocumentId("");
-    if (!requireAuth(() => startAnalysis(nextText))) return;
     startAnalysis(nextText);
+  }
+
+  function handlePasteIntent() {
+    requireAuth();
   }
 
   function createAndActivateChat(
@@ -676,7 +685,10 @@ export default function Home() {
         <button
           className="mt-4 w-full flex items-center justify-center gap-2 rounded-[12px] bg-accent text-on-accent text-[13px] font-semibold transition hover:opacity-90 active:scale-[0.98]"
           style={{ height: "var(--control-h)" }}
-          onClick={() => createAndActivateChat()}
+          onClick={() => {
+            if (!requireAuth(() => createAndActivateChat())) return;
+            createAndActivateChat();
+          }}
           type="button"
         >
           <Plus className="size-4" />
@@ -958,7 +970,7 @@ export default function Home() {
                     background: "color-mix(in oklab, var(--accent) 7%, transparent)",
                   }}
                   disabled={isExtracting}
-                  onClick={() => fileInputRef.current?.click()}
+                  onClick={handleBrowseFiles}
                   type="button"
                 >
                   {isExtracting ? (
@@ -989,6 +1001,7 @@ export default function Home() {
                   className="mt-4 w-full resize-y rounded-[11px] border border-border bg-inset px-3.5 py-3 text-[13.5px] leading-relaxed text-text placeholder:text-muted outline-none transition focus:border-accent"
                   style={{ minHeight: "180px" }}
                   onChange={(e) => handlePastedDocument(e.target.value)}
+                  onFocus={handlePasteIntent}
                   placeholder="Paste document text here…"
                   value={documentText}
                 />
@@ -1098,7 +1111,7 @@ export default function Home() {
 
               <button
                 className="flex items-center gap-1.5 rounded-[10px] border border-border px-3 py-1.5 text-[12.5px] font-semibold text-text-muted transition hover:border-accent hover:text-accent shrink-0"
-                onClick={() => fileInputRef.current?.click()}
+                onClick={handleBrowseFiles}
                 type="button"
               >
                 <Plus className="size-3.5" />
