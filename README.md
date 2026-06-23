@@ -38,7 +38,7 @@ bun install
 Create an environment file:
 
 ```bash
-cp .env.example .env.local
+cp .env.example .env
 ```
 
 Set your DeepSeek key:
@@ -51,7 +51,7 @@ DEEPSEEK_MODEL=deepseek-v4-flash
 Run the development server:
 
 ```bash
-bun dev
+bun run dev
 ```
 
 Open `http://localhost:3000`.

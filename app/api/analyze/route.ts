@@ -1,3 +1,6 @@
+import { getSessionUser } from "@/lib/auth";
+import { getTokenStatus, recordUsage } from "@/lib/tokens";
+
 export const runtime = "nodejs";
 
 type AnalyzeBody = {
@@ -13,15 +16,24 @@ type AnalyzeBody = {
 const encoder = new TextEncoder();
 const DEEPSEEK_CHAT_URL = "https://api.deepseek.com/chat/completions";
 
-type ChatCompletionResponse = {
-  choices?: Array<{
-    message?: {
-      content?: string;
-    };
-  }>;
+type StreamChunk = {
+  choices?: Array<{ delta?: { content?: string } }>;
+  usage?: { total_tokens?: number };
 };
 
 export async function POST(request: Request) {
+  // AI-consuming feature: requires login.
+  const user = await getSessionUser();
+  if (!user) {
+    return new Response("Sign in to use analysis.", { status: 401 });
+  }
+
+  // Block when the monthly token quota has been exhausted.
+  const tokenStatus = await getTokenStatus(user.id);
+  if (tokenStatus && tokenStatus.remaining <= 0) {
+    return new Response("You've run out of tokens for this month.", { status: 402 });
+  }
+
   const body = (await request.json()) as AnalyzeBody;
   const documentText = body.documentText?.trim();
 
@@ -66,38 +78,70 @@ export async function POST(request: Request) {
         },
       ],
       temperature: 0.2,
+      stream: true,
+      stream_options: { include_usage: true },
     }),
   });
 
-  if (!upstream.ok) {
+  if (!upstream.ok || !upstream.body) {
     const errorText = await readProviderError(upstream);
     return new Response(errorText, {
       status: upstream.status || 502,
     });
   }
 
-  const payload = (await upstream.json()) as ChatCompletionResponse;
-  const outputText = extractResponseText(payload);
+  const userId = user.id;
+  const promptChars = prompt.length;
 
-  if (!outputText) {
-    return new Response("The AI provider returned an empty response.", { status: 502 });
-  }
-
-  const stream = new ReadableStream({
+  // Forward the provider's token stream to the client as it is generated, so the
+  // answer is written gradually. Tokens are debited once the stream completes.
+  const stream = new ReadableStream<Uint8Array>({
     async start(controller) {
-      try {
-        for (const chunk of chunkText(outputText)) {
-          controller.enqueue(encoder.encode(chunk));
+      const reader = upstream.body!.getReader();
+      const decoder = new TextDecoder();
+      let buffer = "";
+      let usedTokens = 0;
+      let outputChars = 0;
 
-          if (chunk.trim()) {
-            await new Promise((resolve) => setTimeout(resolve, 18));
+      try {
+        while (true) {
+          const { done, value } = await reader.read();
+          if (done) break;
+          buffer += decoder.decode(value, { stream: true });
+
+          const lines = buffer.split("\n");
+          buffer = lines.pop() ?? "";
+          for (const line of lines) {
+            const trimmed = line.trim();
+            if (!trimmed.startsWith("data:")) continue;
+            const data = trimmed.slice(5).trim();
+            if (data === "[DONE]") continue;
+            try {
+              const json = JSON.parse(data) as StreamChunk;
+              const delta = json.choices?.[0]?.delta?.content;
+              if (delta) {
+                outputChars += delta.length;
+                controller.enqueue(encoder.encode(delta));
+              }
+              if (json.usage?.total_tokens) usedTokens = json.usage.total_tokens;
+            } catch {
+              // ignore keep-alive / malformed lines
+            }
           }
         }
       } catch (error) {
         controller.error(error);
-      } finally {
-        controller.close();
+        return;
       }
+
+      // Fallback rough estimate if the provider didn't report usage.
+      if (usedTokens <= 0) usedTokens = Math.ceil((promptChars + outputChars) / 4);
+      try {
+        await recordUsage(userId, usedTokens);
+      } catch (error) {
+        console.error("Failed to record token usage", error);
+      }
+      controller.close();
     },
   });
 
@@ -107,15 +151,6 @@ export async function POST(request: Request) {
       "Content-Type": "text/plain; charset=utf-8",
     },
   });
-}
-
-function extractResponseText(payload: ChatCompletionResponse) {
-  return payload.choices?.[0]?.message?.content?.trim() ?? "";
-}
-
-function chunkText(value: string) {
-  const chunks = value.match(/\S+\s*/g);
-  return chunks ?? [value];
 }
 
 async function readProviderError(response: Response) {
@@ -147,20 +182,22 @@ async function readProviderError(response: Response) {
 function buildAnalysisPrompt(documentText: string) {
   return `You are an AI document intelligence analyst for a business operations team.
 
-Analyze the document below. Be concise, practical, and specific. If the document is an invoice, contract, policy, or report, call out operational implications.
+Analyze the document(s) below. Be concise, practical, and specific. If a document is an invoice, contract, policy, or report, call out operational implications.
 
-Return exactly these sections and labels:
+The text may contain MULTIPLE documents, separated by "---" and labeled "Document N: <name>". Analyze them together as a single set and produce ONE consolidated response.
+
+Return exactly these sections and labels, and output each label EXACTLY ONCE (do not repeat the sections per document):
 
 SUMMARY:
-Write a clear executive summary in 4-6 sentences.
+Write a clear executive summary in 4-6 sentences covering all documents.
 
 KEY_POINTS:
-- Extract 5-8 important facts, obligations, numbers, dates, entities, or decisions.
+- Extract 5-8 important facts, obligations, numbers, dates, entities, or decisions across all documents.
 
 RISKS_ACTIONS:
-- Extract risks, missing information, follow-up questions, and suggested next actions.
+- Extract risks, missing information, follow-up questions, and suggested next actions across all documents.
 
-Document:
+Document(s):
 """${documentText}"""`;
 }
 

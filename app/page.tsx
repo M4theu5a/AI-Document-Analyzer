@@ -1,25 +1,27 @@
 "use client";
 
 import {
-  AlertCircle,
-  ArrowRight,
-  CheckCircle2,
-  Download,
-  FileText,
-  Loader2,
-  MessageCircle,
-  Moon,
-  MoreHorizontal,
-  Pencil,
-  Plus,
-  RefreshCw,
-  Search,
-  Sparkles,
-  Sun,
-  Trash2,
-  Upload,
-  UserRound,
-} from "lucide-react";
+  WarningCircleIcon as AlertCircle,
+  ArrowRightIcon as ArrowRight,
+  CheckCircleIcon as CheckCircle2,
+  CoinsIcon as Coins,
+  DownloadSimpleIcon as Download,
+  FileTextIcon as FileText,
+  CircleNotchIcon as Loader2,
+  SignOutIcon as LogOut,
+  ChatCircleIcon as MessageCircle,
+  MoonIcon as Moon,
+  DotsThreeIcon as MoreHorizontal,
+  PencilSimpleIcon as Pencil,
+  PlusIcon as Plus,
+  ArrowsClockwiseIcon as RefreshCw,
+  MagnifyingGlassIcon as Search,
+  FileMagnifyingGlassIcon as BrandMark,
+  SunIcon as Sun,
+  TrashIcon as Trash2,
+  UploadSimpleIcon as Upload,
+  UserIcon as UserRound,
+} from "@phosphor-icons/react";
 import {
   ChangeEvent,
   FormEvent,
@@ -29,6 +31,7 @@ import {
   useState,
 } from "react";
 import { normalizeBullets, parseAnalysisSections } from "@/lib/analysis";
+import { AuthForm, type AuthUser } from "@/components/AuthForm";
 
 type IntakeMode = "upload" | "paste";
 type ResultTab = "summary" | "keyPoints" | "risksActions";
@@ -42,18 +45,25 @@ type ChatMessage = {
   createdAt: string;
 };
 
+type DocumentPart = {
+  fileName: string;
+  text: string;
+};
+
 type ChatSession = {
   id: string;
   title: string;
   documentName: string;
   documentText: string;
+  documents: DocumentPart[];
   analysis: string;
   messages: ChatMessage[];
   createdAt: string;
   updatedAt: string;
 };
 
-const CHAT_STORAGE_KEY = "ai-document-analyzer-chats-v1";
+type TokenStatus = { quota: number; used: number; remaining: number; period: string };
+
 const THEME_STORAGE_KEY = "diw:theme";
 
 const tabs: Array<{ id: ResultTab; label: string }> = [
@@ -61,6 +71,12 @@ const tabs: Array<{ id: ResultTab; label: string }> = [
   { id: "keyPoints", label: "Key Points" },
   { id: "risksActions", label: "Risks & Actions" },
 ];
+
+const tabColors: Record<ResultTab, string> = {
+  summary: "var(--accent)",
+  keyPoints: "var(--ok)",
+  risksActions: "var(--danger)",
+};
 
 export default function Home() {
   const [intakeMode, setIntakeMode] = useState<IntakeMode>("upload");
@@ -75,6 +91,9 @@ export default function Home() {
   const [renamingChatId, setRenamingChatId] = useState("");
   const [renameDraft, setRenameDraft] = useState("");
   const [chats, setChats] = useState<ChatSession[]>([]);
+  const [currentUser, setCurrentUser] = useState<{ name: string | null; email: string } | null>(null);
+  const [tokenStatus, setTokenStatus] = useState<TokenStatus | null>(null);
+  const [showAuthModal, setShowAuthModal] = useState(false);
   const [activeChatId, setActiveChatId] = useState("");
   const [draftDocumentId, setDraftDocumentId] = useState("");
   const [hasLoadedChats, setHasLoadedChats] = useState(false);
@@ -84,6 +103,13 @@ export default function Home() {
   const [error, setError] = useState("");
   const fileInputRef = useRef<HTMLInputElement>(null);
   const chatScrollRef = useRef<HTMLDivElement>(null);
+  // Tracks the last JSON synced to the DB per chat, so the persist effect only
+  // pushes chats that actually changed.
+  const lastSyncedRef = useRef<Map<string, string>>(new Map());
+  // Soft-auth gating: authedRef mirrors login state synchronously, and
+  // pendingActionRef holds the action to resume after a successful login.
+  const authedRef = useRef(false);
+  const pendingActionRef = useRef<(() => void) | null>(null);
 
   const sections = useMemo(() => parseAnalysisSections(rawAnalysis), [rawAnalysis]);
   const currentContent = sections[activeTab];
@@ -120,8 +146,19 @@ export default function Home() {
 
   const hasDocument = Boolean(documentText.trim());
   const hasAnalysis = Boolean(rawAnalysis.trim());
+  const workspaceTitle = activeChat ? chatDisplayName(activeChat) : "Untitled document";
   const hasChatMessages = Boolean(activeChat?.messages.length);
   const isDarkTheme = themeMode === "dark";
+  const tokenPct =
+    tokenStatus && tokenStatus.quota > 0
+      ? Math.max(0, Math.min(100, (tokenStatus.remaining / tokenStatus.quota) * 100))
+      : 0;
+  const tokenBarColor =
+    tokenStatus && tokenStatus.remaining <= 0
+      ? "var(--danger)"
+      : tokenPct < 20
+        ? "var(--gold)"
+        : "var(--accent)";
   const riskCount = sections.risksActions ? normalizeBullets(sections.risksActions).length : 0;
 
   const analysisExport = useMemo(
@@ -130,13 +167,17 @@ export default function Home() {
   );
   const chatExport = useMemo(() => buildChatExport(activeChat), [activeChat]);
 
-  // Load sessions from localStorage
+  // Load sessions from the database
   useEffect(() => {
-    try {
-      const saved = window.localStorage.getItem(CHAT_STORAGE_KEY);
-      const parsed = saved ? (JSON.parse(saved) as ChatSession[]) : [];
-      if (Array.isArray(parsed) && parsed.length > 0) {
-        const validChats = parsed.filter(isChatSession).filter(hasMeaningfulChat);
+    let cancelled = false;
+    (async () => {
+      try {
+        const loaded = await fetchChats();
+        if (cancelled) return;
+        const validChats = loaded.filter(hasMeaningfulChat);
+        validChats.forEach((chat) =>
+          lastSyncedRef.current.set(chat.id, serializeChat(chat)),
+        );
         const firstChat = validChats[0];
         if (firstChat) {
           setChats(validChats);
@@ -148,14 +189,42 @@ export default function Home() {
           setHasLoadedChats(true);
           return;
         }
+      } catch {
+        // fall through to a fresh local session
       }
-    } catch {
-      // ignore invalid localStorage
-    }
-    const initialChat = createChatSession();
-    setChats([initialChat]);
-    setActiveChatId(initialChat.id);
-    setHasLoadedChats(true);
+      if (cancelled) return;
+      const initialChat = createChatSession();
+      setChats([initialChat]);
+      setActiveChatId(initialChat.id);
+      setHasLoadedChats(true);
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  // Load the authenticated user for the sidebar footer
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      try {
+        const response = await fetch("/api/auth/me", { cache: "no-store" });
+        if (!response.ok) return;
+        const payload = (await response.json()) as {
+          user?: { name: string | null; email: string } | null;
+        };
+        if (!cancelled && payload.user) {
+          authedRef.current = true;
+          setCurrentUser(payload.user);
+          void refreshTokenStatus();
+        }
+      } catch {
+        // anonymous — browsing is allowed; login is requested when using an action
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
   }, []);
 
   // Load theme (supports old key for backward compat)
@@ -170,14 +239,20 @@ export default function Home() {
     }
   }, []);
 
-  // Persist sessions
+  // Persist sessions to the database — debounced, and only the chats whose
+  // serialized form changed since the last sync. Only for logged-in users.
   useEffect(() => {
-    if (!hasLoadedChats) return;
-    window.localStorage.setItem(
-      CHAT_STORAGE_KEY,
-      JSON.stringify(chats.filter(hasMeaningfulChat)),
-    );
-  }, [chats, hasLoadedChats]);
+    if (!hasLoadedChats || !currentUser) return;
+    const timer = setTimeout(() => {
+      chats.filter(hasMeaningfulChat).forEach((chat) => {
+        const snapshot = serializeChat(chat);
+        if (lastSyncedRef.current.get(chat.id) === snapshot) return;
+        lastSyncedRef.current.set(chat.id, snapshot);
+        void saveChat(chat);
+      });
+    }, 700);
+    return () => clearTimeout(timer);
+  }, [chats, hasLoadedChats, currentUser]);
 
   // Persist & apply theme class on <html>
   useEffect(() => {
@@ -194,10 +269,50 @@ export default function Home() {
 
   // ── Handlers ──────────────────────────────────────────────────────────
 
+  async function refreshTokenStatus() {
+    try {
+      const response = await fetch("/api/tokens", { cache: "no-store" });
+      if (!response.ok) return;
+      const payload = (await response.json()) as { status?: TokenStatus | null };
+      if (payload.status) setTokenStatus(payload.status);
+    } catch {
+      // ignore
+    }
+  }
+
+  // Soft-auth gate: runs the action if logged in, otherwise stores it and opens
+  // the login modal so it can resume after authentication.
+  function requireAuth(action: () => void) {
+    if (authedRef.current) return true;
+    pendingActionRef.current = action;
+    setShowAuthModal(true);
+    return false;
+  }
+
+  function handleAuthSuccess(user: AuthUser) {
+    authedRef.current = true;
+    setCurrentUser(user);
+    setShowAuthModal(false);
+    void refreshTokenStatus();
+    const pending = pendingActionRef.current;
+    pendingActionRef.current = null;
+    pending?.();
+  }
+
+  function closeAuthModal() {
+    pendingActionRef.current = null;
+    setShowAuthModal(false);
+  }
+
   async function handleFileChange(event: ChangeEvent<HTMLInputElement>) {
     const files = Array.from(event.target.files ?? []);
+    if (event.target) event.target.value = "";
     if (!files.length) return;
+    if (!requireAuth(() => void processFiles(files))) return;
+    await processFiles(files);
+  }
 
+  async function processFiles(files: File[]) {
     setError("");
     setIsExtracting(true);
     setDocumentName(buildSelectedFilesLabel(files));
@@ -210,32 +325,66 @@ export default function Home() {
       const payload = (await response.json()) as {
         fileName?: string;
         text?: string;
+        documents?: DocumentPart[];
         error?: string;
       };
       if (!response.ok || !payload.text) {
         throw new Error(payload.error || "Could not extract text from the documents.");
       }
-      setDocumentText(payload.text);
+
+      const incoming: DocumentPart[] = payload.documents?.length
+        ? payload.documents
+        : [{ fileName: payload.fileName ?? buildSelectedFilesLabel(files), text: payload.text }];
+
+      const session = activeChat ?? createAndActivateChat();
+      const merged = [...currentDocuments(session), ...incoming];
+      const mergedText = mergeDocumentText(merged);
+      const mergedName = documentSetName(merged);
+
+      setDocumentText(mergedText);
+      setDocumentName(mergedName);
+      setIntakeMode("upload");
       setRawAnalysis("");
-      attachDocumentToActiveChat(payload.fileName ?? buildSelectedFilesLabel(files), payload.text);
+      updateChat(session.id, (chat) => ({
+        ...chat,
+        documentName: mergedName,
+        documentText: mergedText,
+        documents: merged,
+        analysis: "",
+        updatedAt: new Date().toISOString(),
+      }));
       setDraftDocumentId("");
+      void runAnalysis(mergedText, session.id);
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : "Document upload failed.");
     } finally {
       setIsExtracting(false);
-      if (event.target) event.target.value = "";
     }
   }
 
-  async function handleAnalyze() {
+  function handleAnalyze() {
     if (!documentText.trim()) {
       setError("Upload or paste a document before running analysis.");
       return;
     }
-    const session = activeChat ?? createAndActivateChat(documentName, documentText);
+    if (!requireAuth(() => startAnalysis(documentText))) return;
+    startAnalysis(documentText);
+  }
+
+  function startAnalysis(text: string) {
+    if (tokenStatus && tokenStatus.remaining <= 0) {
+      setError("You've run out of tokens for this month.");
+      return;
+    }
+    const session = activeChat ?? createAndActivateChat(documentName, text);
+    void runAnalysis(text, session.id);
+  }
+
+  async function runAnalysis(text: string, sessionId: string) {
+    if (!text.trim()) return;
     setError("");
     setRawAnalysis("");
-    updateChat(session.id, (chat) => ({
+    updateChat(sessionId, (chat) => ({
       ...chat,
       analysis: "",
       updatedAt: new Date().toISOString(),
@@ -244,20 +393,21 @@ export default function Home() {
     try {
       await streamFromApi(
         "/api/analyze",
-        { mode: "analysis", documentText },
+        { mode: "analysis", documentText: text },
         (chunk) => {
           setRawAnalysis((prev) => prev + chunk);
-          appendAnalysisChunk(session.id, chunk);
+          appendAnalysisChunk(sessionId, chunk);
         },
       );
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : "Analysis failed.");
     } finally {
       setIsAnalyzing(false);
+      void refreshTokenStatus();
     }
   }
 
-  async function handleQuestion(event: FormEvent<HTMLFormElement>) {
+  function handleQuestion(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     const trimmedQuestion = question.trim();
     if (!documentText.trim()) {
@@ -268,7 +418,15 @@ export default function Home() {
       setError("Write a question first.");
       return;
     }
+    if (!requireAuth(() => submitQuestion(trimmedQuestion))) return;
+    submitQuestion(trimmedQuestion);
+  }
 
+  async function submitQuestion(trimmedQuestion: string) {
+    if (tokenStatus && tokenStatus.remaining <= 0) {
+      setError("You've run out of tokens for this month.");
+      return;
+    }
     const session = activeChat ?? createAndActivateChat(documentName, documentText);
     const assistantId = createId();
     const now = new Date().toISOString();
@@ -291,7 +449,6 @@ export default function Home() {
     setIsAnswering(true);
     updateChat(session.id, (chat) => ({
       ...chat,
-      title: chat.messages.length ? chat.title : buildChatTitle(trimmedQuestion),
       documentName,
       documentText,
       messages: [...chat.messages, userMessage, assistantMessage],
@@ -310,14 +467,19 @@ export default function Home() {
       setError(caught instanceof Error ? caught.message : "Question failed.");
     } finally {
       setIsAnswering(false);
+      void refreshTokenStatus();
     }
   }
 
   function handlePastedDocument(nextText: string) {
     setDocumentText(nextText);
     setDocumentName("pasted-document.txt");
-    attachDocumentToActiveChat("pasted-document.txt", nextText);
+    attachDocumentToActiveChat("pasted-document.txt", nextText, [
+      { fileName: "pasted-document.txt", text: nextText },
+    ]);
     setDraftDocumentId("");
+    if (!requireAuth(() => startAnalysis(nextText))) return;
+    startAnalysis(nextText);
   }
 
   function createAndActivateChat(
@@ -362,7 +524,7 @@ export default function Home() {
 
   function startRenamingChat(chat: ChatSession) {
     setRenamingChatId(chat.id);
-    setRenameDraft(getChatDocumentLabel(chat));
+    setRenameDraft(chatDisplayName(chat));
     setOpenChatMenuId("");
   }
 
@@ -374,13 +536,13 @@ export default function Home() {
   function saveRename(chatId: string) {
     const nextName = renameDraft.trim();
     if (!nextName) { cancelRename(); return; }
+    // Renames only the chat's title — the document files stay untouched.
     updateChat(chatId, (chat) => ({
       ...chat,
-      documentName: nextName,
+      title: nextName,
       updatedAt: new Date().toISOString(),
     }));
     setDraftDocumentId("");
-    if (chatId === activeChatId) setDocumentName(nextName);
     cancelRename();
   }
 
@@ -389,6 +551,10 @@ export default function Home() {
     setRenamingChatId("");
     setRenameDraft("");
     setDraftDocumentId("");
+    if (lastSyncedRef.current.has(chatId)) {
+      lastSyncedRef.current.delete(chatId);
+      void deleteChatRemote(chatId);
+    }
     setChats((prev) => {
       const remaining = prev.filter((c) => c.id !== chatId);
       if (remaining.length) {
@@ -423,17 +589,31 @@ export default function Home() {
   async function exportChat() {
     await downloadPdf(
       chatExport,
-      `${toFileSlug(activeChat?.title ?? documentName)}-chat.pdf`,
+      `${toFileSlug(activeChat ? chatDisplayName(activeChat) : documentName)}-chat.pdf`,
       "Document Export",
     );
   }
 
-  function attachDocumentToActiveChat(nextName: string, nextText: string) {
+  async function handleLogout() {
+    try {
+      await fetch("/api/auth/logout", { method: "POST" });
+    } catch {
+      // ignore — redirect anyway
+    }
+    window.location.href = "/login";
+  }
+
+  function attachDocumentToActiveChat(
+    nextName: string,
+    nextText: string,
+    nextDocuments: DocumentPart[],
+  ) {
     if (!activeChatId) return;
     updateChat(activeChatId, (chat) => ({
       ...chat,
       documentName: nextName,
       documentText: nextText,
+      documents: nextDocuments,
       analysis: "",
       updatedAt: new Date().toISOString(),
     }));
@@ -482,7 +662,7 @@ export default function Home() {
         {/* Wordmark */}
         <div className="flex items-center gap-2.5">
           <div className="size-[30px] shrink-0 flex items-center justify-center rounded-[9px] bg-accent">
-            <Sparkles className="size-[15px] text-on-accent" />
+            <BrandMark className="size-[15px] text-on-accent" />
           </div>
           <div className="min-w-0">
             <p className="text-[13.5px] font-bold text-text leading-snug">Document Intelligence</p>
@@ -575,7 +755,7 @@ export default function Home() {
                           style={{ color: chat.id === activeChatId ? "var(--accent)" : "var(--muted)" }}
                         />
                         <span className="block flex-1 min-w-0 truncate text-[12.5px] font-semibold text-text">
-                          {getChatDocumentLabel(chat)}
+                          {chatDisplayName(chat)}
                         </span>
                       </span>
                       <span className="mt-0.5 flex items-center justify-between gap-2">
@@ -634,39 +814,97 @@ export default function Home() {
           )}
         </div>
 
-        {/* Footer: avatar + theme toggle */}
-        <div className="border-t border-border pt-3 mt-3 flex items-center justify-between gap-2">
-          <div className="flex items-center gap-2 min-w-0">
-            <div
-              className="size-7 rounded-full shrink-0 flex items-center justify-center"
-              style={{ background: "color-mix(in oklab, var(--calm) 14%, transparent)", color: "var(--calm)" }}
+        {/* Footer: tokens + user + theme toggle + logout */}
+        <div className="border-t border-border pt-3 mt-3 space-y-3">
+          {currentUser && tokenStatus && (
+            <div>
+              <div className="flex items-center justify-between mb-1.5">
+                <span className="flex items-center gap-1.5 font-mono text-[10px] font-semibold uppercase tracking-[0.08em] text-muted">
+                  <Coins className="size-3" />
+                  Tokens
+                </span>
+                <span className="font-mono text-[10px] font-semibold text-text">
+                  {formatTokens(tokenStatus.remaining)} / {formatTokens(tokenStatus.quota)}
+                </span>
+              </div>
+              <div className="h-1.5 w-full rounded-full bg-inset overflow-hidden">
+                <div
+                  className="h-full rounded-full transition-all"
+                  style={{ width: `${tokenPct}%`, background: tokenBarColor }}
+                />
+              </div>
+              <p className="mt-1 font-mono text-[9px] text-muted">
+                {tokenStatus.remaining <= 0 ? "No tokens left this month" : "Remaining this month"}
+              </p>
+            </div>
+          )}
+          <div className="flex items-center justify-between gap-2">
+            <div className="flex items-center gap-2 min-w-0">
+              <div
+                className="size-7 rounded-full shrink-0 flex items-center justify-center font-semibold text-[11px] uppercase"
+                style={
+                  currentUser
+                    ? { background: "color-mix(in oklab, var(--calm) 14%, transparent)", color: "var(--calm)" }
+                    : { background: "color-mix(in oklab, var(--muted) 16%, transparent)", color: "var(--muted)" }
+                }
+              >
+                {currentUser ? (
+                  (currentUser.name || currentUser.email || "U").charAt(0)
+                ) : (
+                  <UserRound className="size-3.5" />
+                )}
+              </div>
+              <div className="min-w-0 leading-tight">
+                <p className="text-[12.5px] font-medium text-text truncate">
+                  {currentUser ? currentUser.name || currentUser.email : "Guest"}
+                </p>
+                <p className="font-mono text-[9px] text-muted truncate">
+                  {currentUser?.email ?? "Not signed in"}
+                </p>
+              </div>
+            </div>
+            <div className="flex items-center rounded-[9px] bg-inset border border-border p-0.5 shrink-0">
+              <button
+                className={`flex items-center justify-center size-[26px] rounded-[7px] transition ${
+                  !isDarkTheme ? "bg-panel shadow-sm text-text" : "text-muted hover:text-text"
+                }`}
+                onClick={() => setThemeMode("light")}
+                type="button"
+                aria-label="Light theme"
+              >
+                <Sun className="size-3.5" />
+              </button>
+              <button
+                className={`flex items-center justify-center size-[26px] rounded-[7px] transition ${
+                  isDarkTheme ? "bg-panel shadow-sm text-text" : "text-muted hover:text-text"
+                }`}
+                onClick={() => setThemeMode("dark")}
+                type="button"
+                aria-label="Dark theme"
+              >
+                <Moon className="size-3.5" />
+              </button>
+            </div>
+          </div>
+          {currentUser ? (
+            <button
+              className="w-full flex items-center justify-center gap-1.5 rounded-[10px] border border-border px-3 py-2 text-[12px] font-semibold text-text-muted transition hover:border-danger hover:text-danger"
+              onClick={handleLogout}
+              type="button"
+            >
+              <LogOut className="size-3.5" />
+              Sign out
+            </button>
+          ) : (
+            <button
+              className="w-full flex items-center justify-center gap-1.5 rounded-[10px] bg-accent text-on-accent px-3 py-2 text-[12px] font-semibold transition hover:opacity-90"
+              onClick={() => setShowAuthModal(true)}
+              type="button"
             >
               <UserRound className="size-3.5" />
-            </div>
-            <span className="text-[12.5px] font-medium text-text truncate">User</span>
-          </div>
-          <div className="flex items-center rounded-[9px] bg-inset border border-border p-0.5 shrink-0">
-            <button
-              className={`flex items-center justify-center size-[26px] rounded-[7px] transition ${
-                !isDarkTheme ? "bg-panel shadow-sm text-text" : "text-muted hover:text-text"
-              }`}
-              onClick={() => setThemeMode("light")}
-              type="button"
-              aria-label="Light theme"
-            >
-              <Sun className="size-3.5" />
+              Sign in
             </button>
-            <button
-              className={`flex items-center justify-center size-[26px] rounded-[7px] transition ${
-                isDarkTheme ? "bg-panel shadow-sm text-text" : "text-muted hover:text-text"
-              }`}
-              onClick={() => setThemeMode("dark")}
-              type="button"
-              aria-label="Dark theme"
-            >
-              <Moon className="size-3.5" />
-            </button>
-          </div>
+          )}
         </div>
       </aside>
 
@@ -796,7 +1034,7 @@ export default function Home() {
               {/* Preview pills */}
               <div className="mt-4 flex items-center justify-center gap-2 flex-wrap">
                 <SectionPill color="accent" label="Summary" />
-                <SectionPill color="calm" label="Key Points" />
+                <SectionPill color="ok" label="Key Points" />
                 <SectionPill color="danger" label="Risks & Actions" />
               </div>
             </div>
@@ -855,7 +1093,7 @@ export default function Home() {
                 ) : (
                   <RefreshCw className="size-3.5" />
                 )}
-                Re-run
+                Run
               </button>
 
               <button
@@ -890,7 +1128,7 @@ export default function Home() {
                   style={{ padding: "var(--header-py) var(--pad)" }}
                 >
                   <div className="min-w-0">
-                    <h2 className="text-[17px] font-bold text-text truncate">{documentName}</h2>
+                    <h2 className="text-[17px] font-bold text-text truncate">{workspaceTitle}</h2>
                     <p className="font-mono text-[10.5px] font-semibold uppercase tracking-[0.09em] text-muted mt-0.5">
                       Review Workspace
                     </p>
@@ -931,7 +1169,7 @@ export default function Home() {
                         {isActive && (
                           <span
                             className="absolute bottom-0 left-0 right-0 h-[2.5px] rounded-t-full"
-                            style={{ background: isRisks ? "var(--danger)" : "var(--accent)" }}
+                            style={{ background: tabColors[tab.id] }}
                           />
                         )}
                       </button>
@@ -946,8 +1184,8 @@ export default function Home() {
                 >
                   {activeTab === "summary" ? (
                     currentContent ? (
-                      <p className="fade-in-up whitespace-pre-wrap text-[15px] leading-[1.62] text-text">
-                        {currentContent}
+                      <p className="fade-in-up whitespace-pre-wrap text-[13px] leading-[1.6] text-text">
+                        {renderInline(currentContent)}
                         {isAnalyzing && <StreamingCursor />}
                       </p>
                     ) : isAnalyzing ? (
@@ -1053,13 +1291,29 @@ export default function Home() {
           </>
         )}
       </main>
+
+      {/* ── LOGIN MODAL (soft-auth) ──────────────────────────────────── */}
+      {showAuthModal && (
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center p-4"
+          style={{ background: "color-mix(in oklab, var(--bg) 55%, transparent)", backdropFilter: "blur(3px)" }}
+          onClick={closeAuthModal}
+        >
+          <div className="w-full max-w-[420px]" onClick={(e) => e.stopPropagation()}>
+            <p className="mb-3 text-center text-[13px] text-text-muted">
+              Sign in or create an account to use this feature.
+            </p>
+            <AuthForm onSuccess={handleAuthSuccess} onClose={closeAuthModal} />
+          </div>
+        </div>
+      )}
     </div>
   );
 }
 
 // ── Sub-components ─────────────────────────────────────────────────────
 
-function SectionPill({ color, label }: { color: "accent" | "calm" | "danger"; label: string }) {
+function SectionPill({ color, label }: { color: "accent" | "ok" | "danger"; label: string }) {
   return (
     <span
       className="flex items-center gap-1.5 rounded-full px-2.5 py-1 font-mono text-[10px] font-bold uppercase tracking-[0.07em]"
@@ -1094,15 +1348,15 @@ function KeyPointsList({ content, isLoading }: { content: string; isLoading: boo
           <span
             className="shrink-0 mt-[1px] rounded-[5px] px-1.5 py-0.5 font-mono text-[9.5px] font-bold uppercase tracking-[0.07em]"
             style={{
-              color: "var(--accent)",
-              background: "color-mix(in oklab, var(--accent) 10%, transparent)",
-              border: "1px solid color-mix(in oklab, var(--accent) 22%, transparent)",
+              color: "var(--ok)",
+              background: "color-mix(in oklab, var(--ok) 10%, transparent)",
+              border: "1px solid color-mix(in oklab, var(--ok) 22%, transparent)",
             }}
           >
             Key
           </span>
           <span className="text-[13px] leading-[1.5] text-text flex-1 min-w-0">
-            {bullet}
+            {renderInline(bullet)}
             {isLoading && index === bullets.length - 1 && <StreamingCursor />}
           </span>
         </li>
@@ -1137,7 +1391,7 @@ function RisksList({ content, isLoading }: { content: string; isLoading: boolean
               style={{ color: "var(--danger)" }}
             />
             <span className="text-[13px] leading-[1.5] text-text">
-              {bullet}
+              {renderInline(bullet)}
               {isLoading && index === bullets.length - 1 && <StreamingCursor />}
             </span>
           </span>
@@ -1168,6 +1422,38 @@ function SkeletonLines() {
 
 function StreamingCursor() {
   return <span aria-hidden className="streaming-cursor" />;
+}
+
+function TypingDots() {
+  return (
+    <span className="flex items-center gap-1 py-0.5" aria-label="Assistant is typing">
+      {[0, 1, 2].map((i) => (
+        <span key={i} className="typing-dot" style={{ animationDelay: `${i * 0.18}s` }} />
+      ))}
+    </span>
+  );
+}
+
+// Renders a small subset of inline markdown (**bold**, *italic*, `code`) that the
+// model sometimes emits, so it doesn't show up as literal asterisks.
+function renderInline(text: string): React.ReactNode {
+  const parts = text.split(/(\*\*[^*]+\*\*|\*[^*\n]+\*|`[^`]+`)/g);
+  return parts.map((part, i) => {
+    if (part.length > 4 && part.startsWith("**") && part.endsWith("**")) {
+      return <strong key={i}>{part.slice(2, -2)}</strong>;
+    }
+    if (part.length > 2 && part.startsWith("`") && part.endsWith("`")) {
+      return (
+        <code key={i} className="rounded bg-inset px-1 py-0.5 font-mono text-[0.85em]">
+          {part.slice(1, -1)}
+        </code>
+      );
+    }
+    if (part.length > 2 && part.startsWith("*") && part.endsWith("*")) {
+      return <em key={i}>{part.slice(1, -1)}</em>;
+    }
+    return part;
+  });
 }
 
 function ChatBubble({
@@ -1201,11 +1487,11 @@ function ChatBubble({
       >
         {message.content ? (
           <p className="whitespace-pre-wrap">
-            {message.content}
+            {renderInline(message.content)}
             {isStreaming && <StreamingCursor />}
           </p>
         ) : (
-          <SkeletonLines />
+          <TypingDots />
         )}
       </div>
       {isUser && (
@@ -1314,9 +1600,13 @@ function hasMeaningfulChat(chat: ChatSession) {
   );
 }
 
-function getChatDocumentLabel(chat: ChatSession) {
+// The chat's display name: the user-set title if any, otherwise the first
+// document's name, otherwise a placeholder. Independent of the document files.
+function chatDisplayName(chat: ChatSession) {
+  if (chat.title.trim()) return chat.title;
+  if (chat.documents?.length) return chat.documents[0].fileName;
   if (chat.documentName && chat.documentName !== "No document loaded") return chat.documentName;
-  return chat.title === "New chat" ? "Untitled document" : chat.title;
+  return "Untitled document";
 }
 
 function getChatPreview(chat: ChatSession) {
@@ -1343,7 +1633,34 @@ function formatRelativeTime(value: string) {
 
 function createChatSession(documentName = "No document loaded", documentText = ""): ChatSession {
   const now = new Date().toISOString();
-  return { id: createId(), title: "Untitled document", documentName, documentText, analysis: "", messages: [], createdAt: now, updatedAt: now };
+  const documents = documentText ? [{ fileName: documentName, text: documentText }] : [];
+  return { id: createId(), title: "", documentName, documentText, documents, analysis: "", messages: [], createdAt: now, updatedAt: now };
+}
+
+// Returns the documents already attached to a session, falling back to a single
+// part derived from its combined text (covers pasted docs and legacy sessions).
+function currentDocuments(session?: ChatSession): DocumentPart[] {
+  if (session?.documents?.length) return session.documents;
+  if (session?.documentText.trim()) {
+    return [{ fileName: session.documentName, text: session.documentText }];
+  }
+  return [];
+}
+
+function mergeDocumentText(documents: DocumentPart[]) {
+  return documents
+    .map((document, index) => `Document ${index + 1}: ${document.fileName}\n\n${document.text}`)
+    .join("\n\n---\n\n");
+}
+
+function documentSetName(documents: DocumentPart[]) {
+  if (!documents.length) return "No document loaded";
+  if (documents.length === 1) return documents[0].fileName;
+  const visible = documents.slice(0, 2).map((d) => d.fileName).join(", ");
+  const rest = documents.length - 2;
+  return rest > 0
+    ? `${documents.length} documents: ${visible} +${rest}`
+    : `${documents.length} documents: ${visible}`;
 }
 
 function buildSelectedFilesLabel(files: File[]) {
@@ -1358,14 +1675,54 @@ function createId() {
   return `${Date.now()}-${Math.random().toString(36).slice(2)}`;
 }
 
-function buildChatTitle(question: string) {
-  return question.length > 44 ? `${question.slice(0, 44)}…` : question;
+
+// ── Database sync ──────────────────────────────────────────────────────
+
+async function fetchChats(): Promise<ChatSession[]> {
+  const response = await fetch("/api/chats", { cache: "no-store" });
+  if (!response.ok) throw new Error("Failed to load chats");
+  const payload = (await response.json()) as { chats?: ChatSession[] };
+  return Array.isArray(payload.chats) ? payload.chats : [];
 }
 
-function isChatSession(value: unknown): value is ChatSession {
-  if (!value || typeof value !== "object") return false;
-  const c = value as Partial<ChatSession>;
-  return Boolean(c.id && c.title && Array.isArray(c.messages));
+async function saveChat(chat: ChatSession) {
+  try {
+    await fetch(`/api/chats/${chat.id}`, {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(chat),
+    });
+  } catch {
+    // best-effort: the next change re-attempts the sync
+  }
+}
+
+async function deleteChatRemote(chatId: string) {
+  try {
+    await fetch(`/api/chats/${chatId}`, { method: "DELETE" });
+  } catch {
+    // best-effort
+  }
+}
+
+// Stable JSON fingerprint used to detect chats that need re-syncing.
+function serializeChat(chat: ChatSession) {
+  return JSON.stringify({
+    title: chat.title,
+    documentName: chat.documentName,
+    documentText: chat.documentText,
+    documents: chat.documents,
+    analysis: chat.analysis,
+    messages: chat.messages,
+  });
+}
+
+function formatTokens(value: number) {
+  if (value >= 1000) {
+    const k = value / 1000;
+    return `${Number.isInteger(k) ? k : k.toFixed(1)}k`;
+  }
+  return String(Math.max(0, value));
 }
 
 function toFileSlug(value: string) {

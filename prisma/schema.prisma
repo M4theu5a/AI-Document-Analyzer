@@ -1,0 +1,62 @@
+// Prisma schema — PDF Analyzer
+// Docs: https://pris.ly/d/prisma-schema
+
+generator client {
+  provider = "prisma-client"
+  output   = "../lib/generated/prisma"
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+model User {
+  id           String   @id @default(cuid())
+  email        String   @unique
+  name         String?
+  passwordHash String?
+  tokenQuota   Int      @default(100000)
+  tokensUsed   Int      @default(0)
+  quotaPeriod  String   @default("")
+  chats        Chat[]
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+}
+
+model Chat {
+  id           String     @id
+  title        String     @default("Untitled document")
+  documentName String     @default("No document loaded")
+  documentText String     @default("") @db.Text
+  analysis     String     @default("") @db.Text
+  user         User       @relation(fields: [userId], references: [id], onDelete: Cascade)
+  userId       String
+  documents    Document[]
+  messages     Message[]
+  createdAt    DateTime   @default(now())
+  updatedAt    DateTime
+
+  @@index([userId])
+}
+
+model Document {
+  id       String @id @default(cuid())
+  fileName String
+  text     String @db.Text
+  position Int
+  chat     Chat   @relation(fields: [chatId], references: [id], onDelete: Cascade)
+  chatId   String
+
+  @@index([chatId])
+}
+
+model Message {
+  id        String   @id
+  role      String
+  content   String   @db.Text
+  createdAt DateTime @default(now())
+  chat      Chat     @relation(fields: [chatId], references: [id], onDelete: Cascade)
+  chatId    String
+
+  @@index([chatId])
+}

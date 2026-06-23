@@ -108,6 +108,28 @@ textarea {
   animation: fade-in-up 220ms ease-out;
 }
 
+.typing-dot {
+  display: inline-block;
+  width: 0.4rem;
+  height: 0.4rem;
+  border-radius: 9999px;
+  background: var(--muted);
+  animation: typing-bounce 1.1s infinite ease-in-out;
+}
+
+@keyframes typing-bounce {
+  0%,
+  70%,
+  100% {
+    transform: translateY(0);
+    opacity: 0.35;
+  }
+  35% {
+    transform: translateY(-3px);
+    opacity: 0.9;
+  }
+}
+
 @keyframes skeleton-shimmer {
   from {
     background-position: 220% 0;
@@ -137,7 +159,8 @@ textarea {
 @media (prefers-reduced-motion: reduce) {
   .skeleton-line,
   .streaming-cursor,
-  .fade-in-up {
+  .fade-in-up,
+  .typing-dot {
     animation: none;
   }
 }
