@@ -3,6 +3,7 @@
 import {
   WarningCircleIcon as AlertCircle,
   ArrowRightIcon as ArrowRight,
+  CaretDownIcon as ChevronDown,
   CoinsIcon as Coins,
   DownloadSimpleIcon as Download,
   FileTextIcon as FileText,
@@ -25,6 +26,7 @@ import {
 } from "@phosphor-icons/react";
 import {
   ChangeEvent,
+  DragEvent,
   FormEvent,
   useEffect,
   useMemo,
@@ -95,6 +97,7 @@ export default function Home() {
   const [currentUser, setCurrentUser] = useState<{ name: string | null; email: string } | null>(null);
   const [tokenStatus, setTokenStatus] = useState<TokenStatus | null>(null);
   const [showAuthModal, setShowAuthModal] = useState(false);
+  const [showDocumentsMenu, setShowDocumentsMenu] = useState(false);
   const [activeChatId, setActiveChatId] = useState("");
   const [draftDocumentId, setDraftDocumentId] = useState("");
   const [hasLoadedChats, setHasLoadedChats] = useState(false);
@@ -102,9 +105,11 @@ export default function Home() {
   const [isExtracting, setIsExtracting] = useState(false);
   const [isAnalyzing, setIsAnalyzing] = useState(false);
   const [isAnswering, setIsAnswering] = useState(false);
+  const [isDraggingFiles, setIsDraggingFiles] = useState(false);
   const [error, setError] = useState("");
   const fileInputRef = useRef<HTMLInputElement>(null);
   const chatScrollRef = useRef<HTMLDivElement>(null);
+  const documentsMenuRef = useRef<HTMLDivElement>(null);
   // Tracks the last JSON synced to the DB per chat, so the persist effect only
   // pushes chats that actually changed.
   const lastSyncedRef = useRef<Map<string, string>>(new Map());
@@ -119,6 +124,7 @@ export default function Home() {
     () => chats.find((chat) => chat.id === activeChatId),
     [activeChatId, chats],
   );
+  const activeDocuments = useMemo(() => currentDocuments(activeChat), [activeChat]);
   const recentChats = useMemo(
     () =>
       [...chats].sort(
@@ -151,6 +157,17 @@ export default function Home() {
   const isBootstrapping = !hasLoadedChats || !hasCheckedAuth;
   const workspaceTitle = activeChat ? chatDisplayName(activeChat) : "Untitled document";
   const hasChatMessages = Boolean(activeChat?.messages.length);
+  const documentCharTotal = activeDocuments.length
+    ? activeDocuments.reduce((total, document) => total + document.text.trim().length, 0)
+    : documentText.trim().length;
+  const documentHeaderTitle =
+    activeDocuments.length > 1
+      ? `${activeDocuments.length} documents loaded`
+      : activeDocuments[0]?.fileName || documentName;
+  const documentHeaderSubtitle =
+    activeDocuments.length > 1
+      ? `${documentCharTotal.toLocaleString()} total characters`
+      : `${documentCharTotal.toLocaleString()} characters`;
   const isDarkTheme = themeMode === "dark";
   const tokenPct =
     tokenStatus && tokenStatus.quota > 0
@@ -275,6 +292,27 @@ export default function Home() {
 
   // ── Handlers ──────────────────────────────────────────────────────────
 
+  useEffect(() => {
+    if (!showDocumentsMenu) return;
+
+    function handlePointerDown(event: MouseEvent) {
+      const target = event.target;
+      if (target instanceof Node && documentsMenuRef.current?.contains(target)) return;
+      setShowDocumentsMenu(false);
+    }
+
+    function handleKeyDown(event: KeyboardEvent) {
+      if (event.key === "Escape") setShowDocumentsMenu(false);
+    }
+
+    document.addEventListener("mousedown", handlePointerDown);
+    document.addEventListener("keydown", handleKeyDown);
+    return () => {
+      document.removeEventListener("mousedown", handlePointerDown);
+      document.removeEventListener("keydown", handleKeyDown);
+    };
+  }, [showDocumentsMenu]);
+
   async function refreshTokenStatus() {
     try {
       const response = await fetch("/api/tokens", { cache: "no-store" });
@@ -323,6 +361,32 @@ export default function Home() {
     fileInputRef.current?.click();
   }
 
+  function handleFileDragOver(event: DragEvent<HTMLElement>) {
+    event.preventDefault();
+    event.stopPropagation();
+    if (isExtracting) return;
+    event.dataTransfer.dropEffect = "copy";
+    setIsDraggingFiles(true);
+  }
+
+  function handleFileDragLeave(event: DragEvent<HTMLElement>) {
+    event.preventDefault();
+    event.stopPropagation();
+    setIsDraggingFiles(false);
+  }
+
+  function handleFileDrop(event: DragEvent<HTMLElement>) {
+    event.preventDefault();
+    event.stopPropagation();
+    setIsDraggingFiles(false);
+    if (isExtracting) return;
+
+    const files = Array.from(event.dataTransfer.files ?? []);
+    if (!files.length) return;
+    if (!requireAuth(() => void processFiles(files))) return;
+    void processFiles(files);
+  }
+
   async function processFiles(files: File[]) {
     setError("");
     setIsExtracting(true);
@@ -365,6 +429,7 @@ export default function Home() {
         updatedAt: new Date().toISOString(),
       }));
       setDraftDocumentId("");
+      setShowDocumentsMenu(false);
       void runAnalysis(mergedText, session.id);
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : "Document upload failed.");
@@ -513,6 +578,7 @@ export default function Home() {
     setOpenChatMenuId("");
     setRenamingChatId("");
     setRenameDraft("");
+    setShowDocumentsMenu(false);
     setError("");
     return nextChat;
   }
@@ -528,6 +594,7 @@ export default function Home() {
     setOpenChatMenuId("");
     setRenamingChatId("");
     setRenameDraft("");
+    setShowDocumentsMenu(false);
     setError("");
   }
 
@@ -566,6 +633,7 @@ export default function Home() {
     setRenamingChatId("");
     setRenameDraft("");
     setDraftDocumentId("");
+    setShowDocumentsMenu(false);
     if (lastSyncedRef.current.has(chatId)) {
       lastSyncedRef.current.delete(chatId);
       void deleteChatRemote(chatId);
@@ -976,11 +1044,18 @@ export default function Home() {
                 <button
                   className="mt-4 w-full flex flex-col items-center justify-center rounded-[14px] p-10 text-center transition hover:opacity-90 disabled:cursor-not-allowed"
                   style={{
-                    border: "1.5px dashed color-mix(in oklab, var(--accent) 45%, transparent)",
-                    background: "color-mix(in oklab, var(--accent) 7%, transparent)",
+                    border: `1.5px dashed color-mix(in oklab, var(--accent) ${isDraggingFiles ? "78%" : "45%"}, transparent)`,
+                    background: `color-mix(in oklab, var(--accent) ${isDraggingFiles ? "13%" : "7%"}, transparent)`,
+                    boxShadow: isDraggingFiles
+                      ? "inset 0 0 0 1px color-mix(in oklab, var(--accent) 35%, transparent)"
+                      : "none",
                   }}
                   disabled={isExtracting}
                   onClick={handleBrowseFiles}
+                  onDragEnter={handleFileDragOver}
+                  onDragLeave={handleFileDragLeave}
+                  onDragOver={handleFileDragOver}
+                  onDrop={handleFileDrop}
                   type="button"
                 >
                   {isExtracting ? (
@@ -995,6 +1070,8 @@ export default function Home() {
                   <span className="mt-3 text-[13.5px] font-semibold text-text">
                     {isExtracting ? (
                       "Extracting document text…"
+                    ) : isDraggingFiles ? (
+                      "Drop files to upload"
                     ) : (
                       <>
                         Drag & drop, or{" "}
@@ -1078,11 +1155,73 @@ export default function Home() {
               </div>
 
               <div className="min-w-0 flex-1">
-                <p className="text-[13.5px] font-semibold text-text truncate">{documentName}</p>
+                <p className="text-[13.5px] font-semibold text-text truncate">{documentHeaderTitle}</p>
                 <p className="font-mono text-[10px] font-medium text-muted tracking-[0.03em] mt-0.5">
-                  {documentText.trim().length.toLocaleString()} characters
+                  {documentHeaderSubtitle}
                 </p>
               </div>
+
+              {activeDocuments.length > 0 && (
+                <div className="relative shrink-0" ref={documentsMenuRef}>
+                  <button
+                    className="flex items-center gap-1.5 rounded-[10px] border border-border px-3 py-1.5 text-[12.5px] font-semibold text-text-muted transition hover:border-accent hover:text-accent"
+                    onClick={() => setShowDocumentsMenu((current) => !current)}
+                    type="button"
+                    aria-expanded={showDocumentsMenu}
+                    aria-haspopup="menu"
+                  >
+                    <FileText className="size-3.5" />
+                    Documents
+                    <ChevronDown
+                      className={`size-3 transition ${showDocumentsMenu ? "rotate-180" : ""}`}
+                    />
+                  </button>
+
+                  {showDocumentsMenu && (
+                    <div
+                      className="absolute right-0 top-[calc(100%+8px)] z-30 w-[360px] max-w-[calc(100vw-32px)] overflow-hidden rounded-[14px] border border-border bg-panel shadow-card"
+                      role="menu"
+                    >
+                      <div className="border-b border-border px-3.5 py-3">
+                        <p className="text-[13px] font-bold text-text">
+                          Documents in this workspace
+                        </p>
+                        <p className="mt-0.5 font-mono text-[10px] font-medium text-muted">
+                          {activeDocuments.length} {activeDocuments.length === 1 ? "document" : "documents"} · {documentCharTotal.toLocaleString()} characters
+                        </p>
+                      </div>
+
+                      <div className="max-h-[260px] overflow-y-auto p-1.5">
+                        {activeDocuments.map((document, index) => (
+                          <div
+                            className="flex items-start gap-2 rounded-[10px] px-2.5 py-2 text-left"
+                            key={`${document.fileName}-${index}`}
+                            role="menuitem"
+                          >
+                            <span
+                              className="mt-0.5 flex size-6 shrink-0 items-center justify-center rounded-[7px] font-mono text-[10px] font-bold"
+                              style={{
+                                background: "color-mix(in oklab, var(--accent) 10%, transparent)",
+                                color: "var(--accent)",
+                              }}
+                            >
+                              {index + 1}
+                            </span>
+                            <span className="min-w-0 flex-1">
+                              <span className="block truncate text-[12.5px] font-semibold text-text">
+                                {document.fileName}
+                              </span>
+                              <span className="mt-0.5 block font-mono text-[10px] text-muted">
+                                {document.text.trim().length.toLocaleString()} characters
+                              </span>
+                            </span>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+                </div>
+              )}
 
               {hasAnalysis && (
                 <span
@@ -1448,33 +1587,57 @@ function RisksList({ content, isLoading }: { content: string; isLoading: boolean
   }
   return (
     <ul className="fade-in-up space-y-2">
-      {bullets.map((bullet, index) => (
-        <li
-          key={bullet}
-          className="flex items-start gap-0 rounded-[11px] border overflow-hidden"
-          style={{
-            borderColor: "color-mix(in oklab, var(--danger) 22%, transparent)",
-            background: "color-mix(in oklab, var(--danger) 5%, transparent)",
-          }}
-        >
-          <span
-            className="w-1 shrink-0 self-stretch"
-            style={{ background: "var(--danger)" }}
-          />
-          <span className="flex items-start gap-2.5 flex-1 min-w-0 px-3.5 py-2.5">
-            <WarningDiamond
-              className="size-4 shrink-0 mt-[2px]"
-              style={{ color: "var(--danger)" }}
-              weight="fill"
-              aria-hidden
+      {bullets.map((bullet, index) => {
+        const heading = getRiskSectionHeading(bullet);
+
+        if (heading) {
+          return (
+            <li
+              key={`${heading}-${index}`}
+              className="pt-2 first:pt-0"
+            >
+              <span
+                className="inline-flex items-center rounded-full px-2.5 py-1 font-mono text-[10px] font-bold uppercase tracking-[0.08em]"
+                style={{
+                  color: heading.color,
+                  background: `color-mix(in oklab, ${heading.color} 10%, transparent)`,
+                  border: `1px solid color-mix(in oklab, ${heading.color} 24%, transparent)`,
+                }}
+              >
+                {heading.label}
+              </span>
+            </li>
+          );
+        }
+
+        return (
+          <li
+            key={bullet}
+            className="flex items-start gap-0 rounded-[11px] border overflow-hidden"
+            style={{
+              borderColor: "color-mix(in oklab, var(--danger) 22%, transparent)",
+              background: "color-mix(in oklab, var(--danger) 5%, transparent)",
+            }}
+          >
+            <span
+              className="w-1 shrink-0 self-stretch"
+              style={{ background: "var(--danger)" }}
             />
-            <span className="text-[13px] leading-[1.5] text-text">
-              {renderInline(bullet)}
-              {isLoading && index === bullets.length - 1 && <StreamingCursor />}
+            <span className="flex items-start gap-2.5 flex-1 min-w-0 px-3.5 py-2.5">
+              <WarningDiamond
+                className="size-4 shrink-0 mt-[2px]"
+                style={{ color: "var(--danger)" }}
+                weight="fill"
+                aria-hidden
+              />
+              <span className="text-[13px] leading-[1.5] text-text">
+                {renderInline(bullet)}
+                {isLoading && index === bullets.length - 1 && <StreamingCursor />}
+              </span>
             </span>
-          </span>
-        </li>
-      ))}
+          </li>
+        );
+      })}
     </ul>
   );
 }
@@ -1500,6 +1663,35 @@ function SkeletonLines() {
 
 function StreamingCursor() {
   return <span aria-hidden className="streaming-cursor" />;
+}
+
+function getRiskSectionHeading(text: string) {
+  const normalized = text
+    .replace(/\*\*/g, "")
+    .replace(/:$/, "")
+    .trim()
+    .toLowerCase();
+
+  if (["risk", "risks", "key risks", "identified risks"].includes(normalized)) {
+    return { label: "Risks", color: "var(--danger)" };
+  }
+
+  if (
+    [
+      "action",
+      "actions",
+      "recommended action",
+      "recommended actions",
+      "next action",
+      "next actions",
+      "mitigation",
+      "mitigations",
+    ].includes(normalized)
+  ) {
+    return { label: "Actions", color: "var(--accent)" };
+  }
+
+  return null;
 }
 
 function TypingDots() {
@@ -1649,7 +1841,7 @@ async function downloadPdf(content: string, fileName: string, title: string) {
   let y = margin;
   doc.setProperties({ title, subject: "Document Intelligence Workspace export", creator: "Document Intelligence Workspace" });
   for (const rawLine of content.split("\n")) {
-    const line = rawLine.trimEnd();
+    const line = sanitizePdfText(rawLine).trimEnd();
     if (!line.trim()) { y += 10; continue; }
     const style = getPdfLineStyle(line);
     const printableLine = line.replace(/^#{1,3}\s*/, "");
@@ -1663,6 +1855,38 @@ async function downloadPdf(content: string, fileName: string, title: string) {
     y += style.after;
   }
   doc.save(fileName);
+}
+
+function sanitizePdfText(value: string) {
+  const replacements: Record<string, string> = {
+    "\u00a0": " ",
+    "\u00ad": "",
+    "\u2010": "-",
+    "\u2011": "-",
+    "\u2012": "-",
+    "\u2013": "-",
+    "\u2014": "-",
+    "\u2015": "-",
+    "\u2018": "'",
+    "\u2019": "'",
+    "\u201a": "'",
+    "\u201c": "\"",
+    "\u201d": "\"",
+    "\u201e": "\"",
+    "\u2022": "-",
+    "\u2026": "...",
+    "\u2212": "-",
+  };
+
+  return value
+    .normalize("NFKC")
+    .replace(/[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f]/g, "")
+    .replace(/[\u200b-\u200d\ufeff]/g, "")
+    .replace(/[\u00a0\u00ad\u2010-\u2015\u2018-\u201a\u201c-\u201e\u2022\u2026\u2212]/g, (char) => replacements[char] ?? "")
+    .replace(/[^\u0009\u000a\u000d\u0020-\u007e\u00a1-\u00ff]/g, (char) => {
+      const fallback = char.normalize("NFD").replace(/[\u0300-\u036f]/g, "");
+      return /^[\u0020-\u007e\u00a1-\u00ff]+$/.test(fallback) ? fallback : "";
+    });
 }
 
 function getPdfLineStyle(line: string) {
