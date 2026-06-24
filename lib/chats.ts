@@ -54,19 +54,36 @@ export async function listChats(userId: string): Promise<ChatSessionDTO[]> {
 // Upsert a chat and fully replace its documents and messages. The children sets
 // are small per chat, so replace-on-save keeps the sync logic simple and
 // idempotent against the client's local state.
-export async function upsertChat(userId: string, dto: ChatSessionDTO) {
+export async function upsertChat(
+  userId: string,
+  dto: ChatSessionDTO,
+  options: { forceDocumentUpdate?: boolean } = {},
+) {
   const createdAt = parseDate(dto.createdAt);
   const updatedAt = parseDate(dto.updatedAt);
 
   return prisma.$transaction(async (tx) => {
     const existing = await tx.chat.findUnique({
       where: { id: dto.id },
-      select: { userId: true, updatedAt: true },
+      select: {
+        userId: true,
+        updatedAt: true,
+        documents: { select: { id: true } },
+      },
     });
+
+    const effectiveUpdatedAt =
+      existing && existing.updatedAt.getTime() > updatedAt.getTime()
+        ? new Date(Math.max(Date.now(), existing.updatedAt.getTime()))
+        : updatedAt;
 
     if (existing) {
       if (existing.userId !== userId) return false;
-      if (existing.updatedAt.getTime() > updatedAt.getTime()) return false;
+      const stalePayload = existing.updatedAt.getTime() > updatedAt.getTime();
+      const appendsDocuments = dto.documents.length > existing.documents.length;
+      if (stalePayload && !(options.forceDocumentUpdate && appendsDocuments)) {
+        return false;
+      }
 
       await tx.chat.update({
         where: { id: dto.id },
@@ -75,7 +92,7 @@ export async function upsertChat(userId: string, dto: ChatSessionDTO) {
           documentName: dto.documentName,
           documentText: dto.documentText,
           analysis: dto.analysis,
-          updatedAt,
+          updatedAt: effectiveUpdatedAt,
         },
       });
     } else {
@@ -88,7 +105,7 @@ export async function upsertChat(userId: string, dto: ChatSessionDTO) {
           analysis: dto.analysis,
           userId,
           createdAt,
-          updatedAt,
+          updatedAt: effectiveUpdatedAt,
         },
       });
     }

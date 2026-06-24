@@ -425,7 +425,7 @@ export default function Home() {
         analysis: "",
         updatedAt: new Date().toISOString(),
       };
-      if (authedRef.current && !(await saveChat(updatedChat))) {
+      if (authedRef.current && !(await saveChat(updatedChat, { forceDocumentUpdate: true }))) {
         throw new Error("Could not save the updated document set. Please try again.");
       }
 
@@ -1592,24 +1592,23 @@ function RisksList({ content, isLoading }: { content: string; isLoading: boolean
   if (!bullets.length) {
     return isLoading ? <SkeletonLines /> : <EmptyTabState />;
   }
+  const entries = buildRiskListEntries(bullets);
   return (
-    <ul className="fade-in-up space-y-2">
-      {bullets.map((bullet, index) => {
-        const heading = getRiskSectionHeading(bullet);
-
-        if (heading) {
+    <ul className="fade-in-up space-y-2.5">
+      {entries.map((entry, index) => {
+        if (entry.type === "heading") {
           return (
             <li
-              key={`${heading.label}-${index}`}
-              className="pb-0.5 pt-3 first:pt-0"
+              key={`${entry.heading.label}-${index}`}
+              className="pt-4 first:pt-0"
             >
               <span
-                className="block font-mono text-[10.5px] font-bold uppercase tracking-[0.14em]"
+                className="block text-[14px] font-bold text-text"
                 style={{
-                  color: heading.color,
+                  color: entry.heading.color,
                 }}
               >
-                {heading.label}:
+                {entry.heading.label}
               </span>
             </li>
           );
@@ -1617,28 +1616,18 @@ function RisksList({ content, isLoading }: { content: string; isLoading: boolean
 
         return (
           <li
-            key={bullet}
-            className="flex items-start gap-0 rounded-[11px] border overflow-hidden"
-            style={{
-              borderColor: "color-mix(in oklab, var(--danger) 22%, transparent)",
-              background: "color-mix(in oklab, var(--danger) 5%, transparent)",
-            }}
+            key={`${entry.text}-${index}`}
+            className="flex items-start gap-2.5 pl-0.5"
           >
-            <span
-              className="w-1 shrink-0 self-stretch"
-              style={{ background: "var(--danger)" }}
+            <WarningDiamond
+              className="size-4 shrink-0 mt-[3px]"
+              style={{ color: entry.color }}
+              weight="fill"
+              aria-hidden
             />
-            <span className="flex items-start gap-2.5 flex-1 min-w-0 px-3.5 py-2.5">
-              <WarningDiamond
-                className="size-4 shrink-0 mt-[2px]"
-                style={{ color: "var(--danger)" }}
-                weight="fill"
-                aria-hidden
-              />
-              <span className="text-[13px] leading-[1.5] text-text">
-                {renderInline(bullet)}
-                {isLoading && index === bullets.length - 1 && <StreamingCursor />}
-              </span>
+            <span className="text-[13px] leading-[1.6] text-text">
+              {renderInline(entry.text)}
+              {isLoading && index === entries.length - 1 && <StreamingCursor />}
             </span>
           </li>
         );
@@ -1670,6 +1659,75 @@ function StreamingCursor() {
   return <span aria-hidden className="streaming-cursor" />;
 }
 
+type RiskSectionHeading = {
+  label: string;
+  color: string;
+};
+
+type RiskListEntry =
+  | { type: "heading"; heading: RiskSectionHeading }
+  | { type: "item"; text: string; color: string };
+
+function buildRiskListEntries(bullets: string[]): RiskListEntry[] {
+  const entries: RiskListEntry[] = [];
+  let currentHeading = getRiskSectionHeading("Risks");
+
+  for (const bullet of bullets) {
+    const section = splitRiskSectionPrefix(bullet);
+
+    if (section) {
+      currentHeading = section.heading;
+      pushRiskHeading(entries, section.heading);
+      splitRiskSectionItems(section.body).forEach((item) => {
+        entries.push({ type: "item", text: item, color: section.heading.color });
+      });
+      continue;
+    }
+
+    const heading = getRiskSectionHeading(bullet);
+    if (heading) {
+      currentHeading = heading;
+      pushRiskHeading(entries, heading);
+      continue;
+    }
+
+    entries.push({
+      type: "item",
+      text: bullet,
+      color: currentHeading?.color ?? "var(--danger)",
+    });
+  }
+
+  return entries;
+}
+
+function pushRiskHeading(entries: RiskListEntry[], heading: RiskSectionHeading) {
+  const last = entries[entries.length - 1];
+  if (last?.type === "heading" && last.heading.label === heading.label) return;
+  entries.push({ type: "heading", heading });
+}
+
+function splitRiskSectionPrefix(text: string) {
+  const clean = text.replace(/\*\*/g, "").trim();
+  const separatorIndex = clean.indexOf(":");
+  if (separatorIndex <= 0 || separatorIndex > 42) return null;
+
+  const label = clean.slice(0, separatorIndex).trim();
+  if (!label || /[.!?]/.test(label)) return null;
+
+  const heading = getRiskSectionHeading(label);
+  if (!heading) return null;
+
+  const body = clean.slice(separatorIndex + 1).trim();
+  return body ? { heading, body } : null;
+}
+
+function splitRiskSectionItems(text: string) {
+  const questionParts = text.match(/[^?]+(?:\?|$)/g);
+  const pieces = text.includes("?") && questionParts ? questionParts : text.split(";");
+  return pieces.map((piece) => piece.trim()).filter(Boolean);
+}
+
 function getRiskSectionHeading(text: string) {
   const clean = text.replace(/\*\*/g, "").trim();
   const normalized = text
@@ -1684,6 +1742,14 @@ function getRiskSectionHeading(text: string) {
 
   if (["missing information", "missing info", "information gaps", "gaps"].includes(normalized)) {
     return { label: "Missing information", color: "var(--warning)" };
+  }
+
+  if (["follow-up question", "follow-up questions", "follow up question", "follow up questions"].includes(normalized)) {
+    return { label: "Follow-up questions", color: "var(--accent)" };
+  }
+
+  if (["suggested next action", "suggested next actions", "suggested actions"].includes(normalized)) {
+    return { label: "Suggested next actions", color: "var(--accent)" };
   }
 
   if (
@@ -2004,11 +2070,17 @@ async function fetchChats(): Promise<ChatSession[]> {
   return Array.isArray(payload.chats) ? payload.chats : [];
 }
 
-async function saveChat(chat: ChatSession) {
+async function saveChat(
+  chat: ChatSession,
+  options: { forceDocumentUpdate?: boolean } = {},
+) {
   try {
     const response = await fetch(`/api/chats/${chat.id}`, {
       method: "PUT",
-      headers: { "Content-Type": "application/json" },
+      headers: {
+        "Content-Type": "application/json",
+        ...(options.forceDocumentUpdate ? { "X-Document-Update": "true" } : {}),
+      },
       body: JSON.stringify(chat),
     });
     return response.ok;

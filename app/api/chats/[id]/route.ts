@@ -16,7 +16,9 @@ export async function PUT(
     if (!dto || dto.id !== id) {
       return NextResponse.json({ error: "Invalid chat payload." }, { status: 400 });
     }
-    const saved = await upsertChat(user.id, dto);
+    const saved = await upsertChat(user.id, dto, {
+      forceDocumentUpdate: request.headers.get("x-document-update") === "true",
+    });
     if (!saved) {
       return NextResponse.json({ ok: false, stale: true }, { status: 409 });
     }
