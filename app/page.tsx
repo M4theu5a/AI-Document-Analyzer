@@ -111,6 +111,7 @@ export default function Home() {
   const fileInputRef = useRef<HTMLInputElement>(null);
   const chatScrollRef = useRef<HTMLDivElement>(null);
   const documentsMenuRef = useRef<HTMLDivElement>(null);
+  const activeChatRef = useRef<ChatSession | undefined>(undefined);
   // Tracks the last JSON synced to the DB per chat, so the persist effect only
   // pushes chats that actually changed.
   const lastSyncedRef = useRef<Map<string, string>>(new Map());
@@ -195,18 +196,7 @@ export default function Home() {
       try {
         const loaded = await fetchChats();
         if (cancelled) return;
-        const validChats = loaded.filter(hasMeaningfulChat);
-        validChats.forEach((chat) =>
-          lastSyncedRef.current.set(chat.id, serializeChat(chat)),
-        );
-        const firstChat = validChats[0];
-        if (firstChat) {
-          setChats(validChats);
-          setActiveChatId(firstChat.id);
-          setDocumentName(firstChat.documentName);
-          setDocumentText(firstChat.documentText);
-          setRawAnalysis(firstChat.analysis ?? "");
-          setIntakeMode(firstChat.documentText ? "paste" : "upload");
+        if (applyLoadedChats(loaded)) {
           setHasLoadedChats(true);
           return;
         }
@@ -292,6 +282,10 @@ export default function Home() {
     el.scrollTo({ top: el.scrollHeight, behavior: isAnswering ? "smooth" : "auto" });
   }, [activeChatId, activeChat?.messages.length, activeChat?.updatedAt, isAnswering]);
 
+  useEffect(() => {
+    activeChatRef.current = activeChat;
+  }, [activeChat]);
+
   // ── Handlers ──────────────────────────────────────────────────────────
 
   useEffect(() => {
@@ -335,13 +329,40 @@ export default function Home() {
     return false;
   }
 
-  function handleAuthSuccess(user: AuthUser) {
+  function applyLoadedChats(loaded: ChatSession[]) {
+    const validChats = loaded.filter(hasMeaningfulChat);
+    validChats.forEach((chat) =>
+      lastSyncedRef.current.set(chat.id, serializeChat(chat)),
+    );
+    const firstChat = validChats[0];
+    if (!firstChat) return false;
+
+    activeChatRef.current = firstChat;
+    setChats(validChats);
+    setActiveChatId(firstChat.id);
+    setDocumentName(firstChat.documentName);
+    setDocumentText(firstChat.documentText);
+    setRawAnalysis(firstChat.analysis ?? "");
+    setIntakeMode(firstChat.documentText ? "paste" : "upload");
+    setQuestion("");
+    setError("");
+    setNotice("");
+    return true;
+  }
+
+  async function handleAuthSuccess(user: AuthUser) {
     authedRef.current = true;
     setCurrentUser(user);
     setShowAuthModal(false);
     void refreshTokenStatus();
     const pending = pendingActionRef.current;
     pendingActionRef.current = null;
+    try {
+      const loaded = await fetchChats();
+      applyLoadedChats(loaded);
+    } catch {
+      // A fresh account may not have persisted chats yet.
+    }
     pending?.();
   }
 
@@ -414,7 +435,7 @@ export default function Home() {
         ? payload.documents
         : [{ fileName: payload.fileName ?? buildSelectedFilesLabel(files), text: payload.text }];
 
-      const session = activeChat ?? createAndActivateChat();
+      const session = activeChatRef.current ?? createAndActivateChat();
       const { documents: merged, duplicateCount } = mergeDocumentParts(
         currentDocuments(session),
         incoming,
@@ -595,6 +616,7 @@ export default function Home() {
     nextDocumentText = "",
   ) {
     const nextChat = createChatSession(nextDocumentName, nextDocumentText);
+    activeChatRef.current = nextChat;
     setChats((prev) => [nextChat, ...prev.filter(hasMeaningfulChat)]);
     setActiveChatId(nextChat.id);
     setDraftDocumentId(hasMeaningfulChat(nextChat) ? "" : nextChat.id);
@@ -613,6 +635,7 @@ export default function Home() {
   }
 
   function selectChat(chat: ChatSession) {
+    activeChatRef.current = chat;
     setActiveChatId(chat.id);
     setDraftDocumentId(chat.id === draftDocumentId ? draftDocumentId : "");
     setDocumentName(chat.documentName);
