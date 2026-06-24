@@ -1,185 +1,219 @@
 # Document Intelligence Workspace
 
-An AI-powered document analysis workspace built with Next.js. Upload one or more
-PDF/TXT/Markdown files (or paste text) and get a structured review — **Summary**,
-**Key Points**, and **Risks & Actions** — plus a chat grounded in the loaded
-documents. Analyses and chats are persisted per user in PostgreSQL.
+A document intelligence app built with Next.js. Users can upload one or more
+PDF/TXT/Markdown files, paste text, generate a structured review, and continue
+a grounded chat about the loaded documents.
 
----
+The app includes authentication, persisted workspaces, token quota tracking,
+PDF export, light/dark themes, and production-ready social preview metadata.
 
 ## Features
 
-- **Multi-document analysis** — upload up to 5 files at once, then keep adding
-  more to the same workspace; the review re-runs across all of them.
-- **Structured review** — Summary, Key Points, and Risks & Actions, rendered
-  with light inline markdown (bold/italic/code).
-- **Grounded chat** — ask follow-up questions answered from the loaded documents.
-- **Real-time streaming** — answers are written token-by-token as the model
-  generates them.
-- **Soft authentication** — browse the app freely; a login modal only appears
-  when you use a feature (analyze, chat, add documents). Email + password.
-- **Monthly token quota** — each user gets a monthly token allowance with a
-  live counter in the sidebar; requests are blocked when the balance runs out.
-- **Persistence** — chats, documents, messages, and analysis are saved per user.
-- **PDF export** — export the analysis or the chat transcript.
-- **Light/dark theme**.
+- Multi-document intake: upload up to 5 files at once and keep adding files to
+  the same workspace.
+- Text intake: paste raw document text when a file is not available.
+- Structured review: Summary, Key Points, and Risks & Actions.
+- Grounded document chat: ask follow-up questions using the current document
+  context and chat history.
+- Streaming responses: analysis and chat answers render progressively.
+- Auth-gated actions: visitors can browse the app, but document upload, paste,
+  analysis, chat, and persistence require sign-in.
+- Persistent workspaces: chats, documents, messages, and analysis are saved per
+  user in PostgreSQL.
+- Monthly token quota: each user has a configurable monthly allowance.
+- PDF export: export the structured review or the chat transcript.
+- Polished UI: responsive workspace layout, custom favicon, social preview
+  image, and light/dark theme support.
 
 ## Tech stack
 
 | Area | Technology |
-|------|------------|
-| Framework | Next.js (App Router), React 19, TypeScript |
+| --- | --- |
+| Framework | Next.js App Router, React 19, TypeScript |
 | Styling | Tailwind CSS, Phosphor icons |
-| Database | PostgreSQL via Prisma 7 (`@prisma/adapter-pg` + `pg`) |
-| Auth | `bcryptjs` (password hashing) + `jose` (JWT in an httpOnly cookie) |
-| AI | DeepSeek Chat Completions API (streaming) |
-| Parsing / export | `pdf-parse`, `jspdf` |
-| Package manager | [Bun](https://bun.sh) |
+| Database | PostgreSQL with Prisma 7, `@prisma/adapter-pg`, and `pg` |
+| Auth | Email/password, `bcryptjs`, JWT session cookie with `jose` |
+| AI | DeepSeek Chat Completions API with streaming |
+| Document parsing | `pdf-parse` |
+| PDF export | `jspdf` |
+| Package manager | Bun |
 
-## Prerequisites
+## Requirements
 
-- [Bun](https://bun.sh) 1.x
-- A running **PostgreSQL** instance (local or hosted)
-- A **DeepSeek** API key
+- Bun 1.x
+- PostgreSQL database, local or hosted
+- DeepSeek API key
 
 ## Getting started
 
-```bash
-# 1. Install dependencies (also generates the Prisma client)
-bun install
+Install dependencies:
 
-# 2. Create your local env file from the template
+```bash
+bun install
+```
+
+Create a local environment file:
+
+```bash
 cp .env.example .env
 ```
 
-Fill in `.env` (see [Environment variables](#environment-variables) below), then
-set up the database schema:
+Fill in the variables described below, then apply the database migrations:
 
 ```bash
-# 3. Create the database (if needed) and apply migrations
 bun run db:migrate
+```
 
-# 4. Start the dev server
+Start the development server:
+
+```bash
 bun run dev
 ```
 
-Open <http://localhost:3000>.
+Open:
 
-> **Note:** after changing `prisma/schema.prisma` and running a migration,
-> **restart `bun run dev`**. The dev server caches the generated Prisma client in
-> memory, so a running process won't pick up new fields until restarted.
+```txt
+http://localhost:3000
+```
+
+After changing `prisma/schema.prisma` or applying migrations, restart the dev
+server so the running process picks up the regenerated Prisma client.
 
 ## Environment variables
 
-All variables live in `.env` (git-ignored). A documented template is in
-`.env.example`.
-
 | Variable | Required | Description |
-|----------|----------|-------------|
-| `DATABASE_URL` | Yes | PostgreSQL connection string. |
-| `SESSION_SECRET` | Yes | Secret used to sign the session JWT. Generate a long random value. |
-| `DEEPSEEK_API_KEY` | Yes | DeepSeek API key (server-side only; never exposed to the client). |
-| `DEEPSEEK_MODEL` | — | Model name. Defaults to `deepseek-v4-flash`. |
-| `TOKEN_MONTHLY_QUOTA` | — | Monthly token allowance granted to each new user. Defaults to `100000`. |
+| --- | --- | --- |
+| `DATABASE_URL` | Yes | PostgreSQL connection string. Use SSL for hosted databases. |
+| `SESSION_SECRET` | Yes | Secret used to sign the session JWT. Use a long random value. |
+| `DEEPSEEK_API_KEY` | Yes | Server-side DeepSeek API key. |
+| `DEEPSEEK_MODEL` | No | Model name. Defaults to `deepseek-v4-flash`. |
+| `TOKEN_MONTHLY_QUOTA` | No | Monthly token allowance for new users. Defaults to `100000`. |
+| `NEXT_PUBLIC_SITE_URL` | No | Public site URL used for social preview metadata. Recommended in production. |
 
-Generate a session secret with:
+Generate a session secret:
 
 ```bash
 node -e "console.log(require('crypto').randomBytes(48).toString('base64url'))"
 ```
 
+Example hosted database URL:
+
+```env
+DATABASE_URL="postgresql://USER:PASSWORD@HOST/DATABASE?sslmode=require"
+```
+
 ## Scripts
 
 | Script | Description |
-|--------|-------------|
-| `bun run dev` | Start the dev server. |
-| `bun run build` | Production build. |
+| --- | --- |
+| `bun run dev` | Start the development server. |
+| `bun run build` | Create a production build. |
 | `bun run start` | Run the production build. |
-| `bun run lint` | Lint with ESLint. |
-| `bun run typecheck` | Type-check with `tsc`. |
-| `bun run db:migrate` | Create/apply a migration (development). |
-| `bun run db:deploy` | Apply pending migrations (production/CI). |
+| `bun run lint` | Run ESLint. |
+| `bun run typecheck` | Run TypeScript without emitting files. |
+| `bun run db:migrate` | Create/apply migrations in development. |
+| `bun run db:deploy` | Apply pending migrations in production/CI. |
 | `bun run db:generate` | Regenerate the Prisma client. |
 | `bun run db:studio` | Open Prisma Studio. |
 
 ## Data model
 
 | Model | Purpose |
-|-------|---------|
-| `User` | Account (email, password hash) and token quota (`tokenQuota`, `tokensUsed`, `quotaPeriod`). |
-| `Chat` | A workspace/conversation: `title` (renameable), the combined document text, and the analysis. Belongs to a `User`. |
-| `Document` | An individual uploaded file (name + extracted text) attached to a `Chat`. |
-| `Message` | A chat message (`user` / `assistant`). |
+| --- | --- |
+| `User` | Account, password hash, token quota, and usage. |
+| `Chat` | A document workspace/conversation owned by a user. |
+| `Document` | Uploaded or pasted document content attached to a chat. |
+| `Message` | User and assistant messages in the document chat. |
 
-All relations cascade on delete. See [`prisma/schema.prisma`](prisma/schema.prisma).
+Relations cascade on delete. See `prisma/schema.prisma`.
 
 ## API routes
 
 | Method | Route | Auth | Description |
-|--------|-------|------|-------------|
-| `POST` | `/api/extract` | — | Extract text from up to 5 PDF/TXT/MD files (≤ 8 MB each). |
-| `POST` | `/api/analyze` | Yes | Stream the analysis or a grounded chat answer; meters and debits tokens. |
+| --- | --- | --- | --- |
+| `POST` | `/api/extract` | Yes | Extract text from up to 5 PDF/TXT/MD files. |
+| `POST` | `/api/analyze` | Yes | Stream a structured review or a grounded chat answer. |
 | `GET` | `/api/chats` | Yes | List the current user's chats. |
-| `PUT` | `/api/chats/[id]` | Yes | Create/update a chat (documents + messages). |
+| `PUT` | `/api/chats/[id]` | Yes | Create or update a chat with documents and messages. |
 | `DELETE` | `/api/chats/[id]` | Yes | Delete a chat. |
-| `GET` | `/api/tokens` | Yes | Current token balance for the user. |
-| `POST` | `/api/auth/register` | — | Create an account and start a session. |
-| `POST` | `/api/auth/login` | — | Sign in. |
-| `POST` | `/api/auth/logout` | — | Clear the session. |
-| `GET` | `/api/auth/me` | — | Current user (or `401`). |
+| `GET` | `/api/tokens` | Yes | Return the current token balance. |
+| `POST` | `/api/auth/register` | No | Create an account and start a session. |
+| `POST` | `/api/auth/login` | No | Sign in. |
+| `POST` | `/api/auth/logout` | No | Clear the session. |
+| `GET` | `/api/auth/me` | No | Return the current user or `401`. |
 
 ## How it works
 
-- **Auth model** — the app is fully browsable without an account. The
-  `middleware` only keeps logged-in users away from `/login`; API routes enforce
-  `401`. The client gates AI/persistence actions behind a login modal and resumes
-  the action after a successful sign-in.
-- **Token quota** — `/api/analyze` reads the provider's reported usage and debits
-  it from the user's monthly allowance (reset lazily at the start of each month).
-  When the balance hits zero, requests return `402` and the UI blocks the action.
-- **Streaming** — the analyze route forwards the provider's SSE stream straight to
-  the client, so text appears progressively.
-- **Persistence** — the client syncs changed chats to the database (debounced);
-  documents and messages are stored as related rows.
+- The app uses soft authentication: the main page is browsable, but productive
+  actions open the sign-in modal before any document is processed.
+- The extract and analyze API routes also enforce authentication server-side.
+- The client stores a temporary local workspace while loading, then hydrates from
+  the database to avoid flashing the wrong state on refresh.
+- Analysis uses streaming so generated content appears progressively.
+- Chat persistence is debounced to avoid writing every small UI change.
+- Token usage is tracked per user and reset lazily by month.
+- Open Graph and Twitter image routes generate the large link preview card.
 
 ## Project structure
 
-```
+```txt
 app/
   api/
-    analyze/      # AI analysis + chat (streaming, token metering)
-    auth/         # register, login, logout, me
-    chats/        # CRUD for persisted chats
-    extract/      # file text extraction
-    tokens/       # token balance
-  login/          # auth screen
-  page.tsx        # main workspace UI
+    analyze/      AI analysis and grounded chat streaming
+    auth/         register, login, logout, me
+    chats/        persisted chat CRUD
+    extract/      document text extraction
+    tokens/       token balance
+  icon.svg        browser tab favicon
+  layout.tsx      app metadata and font setup
+  login/          auth screen
+  opengraph-image.tsx
+  page.tsx        main workspace UI
+  twitter-image.tsx
 components/
-  AuthForm.tsx    # shared sign in / create account form (page + modal)
+  AuthForm.tsx
 lib/
-  analysis.ts     # parse the model output into sections
-  auth.ts         # password hashing, JWT, session helpers
-  chats.ts        # chat persistence + DTO mappers
-  prisma.ts       # Prisma client (pg driver adapter)
-  tokens.ts       # monthly token quota logic
+  analysis.ts
+  auth.ts
+  chats.ts
+  prisma.ts
+  tokens.ts
 prisma/
-  schema.prisma   # data model
-  migrations/      # SQL migrations
-middleware.ts     # /login redirect for authenticated users
+  migrations/
+  schema.prisma
+middleware.ts
 ```
 
 ## Deployment
 
-The app runs on any Node-capable host (e.g. Vercel) plus a hosted PostgreSQL
-(e.g. Neon, Supabase).
+The app is ready for Vercel or any Node-capable host with PostgreSQL.
 
-1. Set the environment variables from the table above in the host's project
-   settings.
-2. Apply migrations during the build/release step: `bun run db:deploy`.
-3. For serverless, prefer a **pooled** PostgreSQL connection string to avoid
-   exhausting connections.
+For Vercel, use:
 
-> Security: `.env` and the generated Prisma client (`lib/generated/prisma`) are
-> git-ignored. The DeepSeek key is only ever used server-side. For a public demo,
-> consider lowering `TOKEN_MONTHLY_QUOTA`, since open sign-up means new accounts
-> consume the configured key's credits (bounded by the quota).
+```bash
+Install Command: bun install
+Build Command: bun run db:deploy && bun run build
+```
+
+Set the production environment variables in the Vercel project settings:
+
+```env
+DATABASE_URL=postgresql://...
+SESSION_SECRET=...
+DEEPSEEK_API_KEY=...
+DEEPSEEK_MODEL=deepseek-v4-flash
+TOKEN_MONTHLY_QUOTA=100000
+NEXT_PUBLIC_SITE_URL=https://your-domain.vercel.app
+```
+
+For serverless deployments, prefer a pooled PostgreSQL connection string when
+your database provider offers one.
+
+## Security notes
+
+- Never commit `.env` files.
+- Keep `DEEPSEEK_API_KEY` server-side only.
+- Rotate database credentials if they are exposed in chat, logs, screenshots, or
+  public issue trackers.
+- For a public demo, keep `TOKEN_MONTHLY_QUOTA` conservative because new users
+  consume credits from the configured provider key.
