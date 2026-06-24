@@ -107,6 +107,7 @@ export default function Home() {
   const [isAnswering, setIsAnswering] = useState(false);
   const [isDraggingFiles, setIsDraggingFiles] = useState(false);
   const [error, setError] = useState("");
+  const [notice, setNotice] = useState("");
   const fileInputRef = useRef<HTMLInputElement>(null);
   const chatScrollRef = useRef<HTMLDivElement>(null);
   const documentsMenuRef = useRef<HTMLDivElement>(null);
@@ -390,6 +391,7 @@ export default function Home() {
 
   async function processFiles(files: File[]) {
     setError("");
+    setNotice("");
     setIsExtracting(true);
     setDocumentName(buildSelectedFilesLabel(files));
 
@@ -413,7 +415,24 @@ export default function Home() {
         : [{ fileName: payload.fileName ?? buildSelectedFilesLabel(files), text: payload.text }];
 
       const session = activeChat ?? createAndActivateChat();
-      const merged = [...currentDocuments(session), ...incoming];
+      const { documents: merged, duplicateCount } = mergeDocumentParts(
+        currentDocuments(session),
+        incoming,
+      );
+
+      if (duplicateCount) {
+        setNotice(buildDuplicateDocumentNotice(duplicateCount, incoming.length));
+      }
+
+      if (duplicateCount === incoming.length) {
+        setDocumentName(session.documentName);
+        setDocumentText(session.documentText);
+        setIntakeMode(session.documentText ? "paste" : "upload");
+        setDraftDocumentId("");
+        setShowDocumentsMenu(false);
+        return;
+      }
+
       const mergedText = mergeDocumentText(merged);
       const mergedName = documentSetName(merged);
 
@@ -439,6 +458,7 @@ export default function Home() {
       lastSyncedRef.current.set(updatedChat.id, serializeChat(updatedChat));
       void runAnalysis(mergedText, session.id);
     } catch (caught) {
+      setNotice("");
       setError(caught instanceof Error ? caught.message : "Document upload failed.");
     } finally {
       setIsExtracting(false);
@@ -556,6 +576,7 @@ export default function Home() {
 
   function handlePastedDocument(nextText: string) {
     if (!requireAuth(() => handlePastedDocument(nextText))) return;
+    setNotice("");
     setDocumentText(nextText);
     setDocumentName("pasted-document.txt");
     attachDocumentToActiveChat("pasted-document.txt", nextText, [
@@ -587,6 +608,7 @@ export default function Home() {
     setRenameDraft("");
     setShowDocumentsMenu(false);
     setError("");
+    setNotice("");
     return nextChat;
   }
 
@@ -603,6 +625,7 @@ export default function Home() {
     setRenameDraft("");
     setShowDocumentsMenu(false);
     setError("");
+    setNotice("");
   }
 
   function toggleChatMenu(chatId: string) {
@@ -1248,6 +1271,13 @@ export default function Home() {
                 <span className="flex items-center gap-1.5 text-[12.5px] font-medium shrink-0" style={{ color: "var(--danger)" }}>
                   <AlertCircle className="size-3.5" />
                   {error}
+                </span>
+              )}
+
+              {notice && !error && (
+                <span className="flex items-center gap-1.5 text-[12.5px] font-medium shrink-0" style={{ color: "var(--warning)" }}>
+                  <AlertCircle className="size-3.5" />
+                  {notice}
                 </span>
               )}
 
@@ -2036,6 +2066,24 @@ function currentDocuments(session?: ChatSession): DocumentPart[] {
   return [];
 }
 
+function mergeDocumentParts(existing: DocumentPart[], incoming: DocumentPart[]) {
+  const merged = [...existing];
+  const seen = new Set(existing.map(documentKey));
+  let duplicateCount = 0;
+
+  incoming.forEach((document) => {
+    const key = documentKey(document);
+    if (seen.has(key)) {
+      duplicateCount += 1;
+      return;
+    }
+    seen.add(key);
+    merged.push(document);
+  });
+
+  return { documents: merged, duplicateCount };
+}
+
 function mergeDocumentText(documents: DocumentPart[]) {
   return documents
     .map((document, index) => `Document ${index + 1}: ${document.fileName}\n\n${document.text}`)
@@ -2057,6 +2105,22 @@ function buildSelectedFilesLabel(files: File[]) {
   const visible = files.slice(0, 2).map((f) => f.name).join(", ");
   const rest = files.length - 2;
   return rest > 0 ? `${files.length} documents: ${visible} +${rest}` : `${files.length} documents: ${visible}`;
+}
+
+function buildDuplicateDocumentNotice(duplicateCount: number, uploadedCount: number) {
+  if (duplicateCount === uploadedCount) {
+    return duplicateCount === 1
+      ? "This document is already attached to this chat."
+      : "These documents are already attached to this chat.";
+  }
+
+  return duplicateCount === 1
+    ? "1 document was already attached and was skipped."
+    : `${duplicateCount} documents were already attached and were skipped.`;
+}
+
+function documentKey(document: DocumentPart) {
+  return `${document.fileName}\u0000${document.text}`;
 }
 
 function createId() {

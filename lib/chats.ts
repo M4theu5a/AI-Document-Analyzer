@@ -75,6 +75,17 @@ export async function upsertChat(
       },
     });
 
+    const forcedDocumentUpdate = Boolean(options.forceDocumentUpdate);
+    const documentsToSave =
+      forcedDocumentUpdate && existing
+        ? mergeDocuments(existing.documents, dto.documents)
+        : dto.documents;
+    const documentName = forcedDocumentUpdate
+      ? documentSetName(documentsToSave)
+      : dto.documentName;
+    const documentText = forcedDocumentUpdate
+      ? mergeDocumentText(documentsToSave)
+      : dto.documentText;
     const effectiveUpdatedAt =
       existing && existing.updatedAt.getTime() > updatedAt.getTime()
         ? new Date(Math.max(Date.now(), existing.updatedAt.getTime()))
@@ -83,8 +94,7 @@ export async function upsertChat(
     if (existing) {
       if (existing.userId !== userId) return false;
       const stalePayload = existing.updatedAt.getTime() > updatedAt.getTime();
-      const keepsExistingDocuments = containsAllDocuments(dto.documents, existing.documents);
-      if (stalePayload && !(options.forceDocumentUpdate && keepsExistingDocuments)) {
+      if (stalePayload && !forcedDocumentUpdate) {
         return false;
       }
 
@@ -92,8 +102,8 @@ export async function upsertChat(
         where: { id: dto.id },
         data: {
           title: dto.title,
-          documentName: dto.documentName,
-          documentText: dto.documentText,
+          documentName,
+          documentText,
           analysis: dto.analysis,
           updatedAt: effectiveUpdatedAt,
         },
@@ -103,8 +113,8 @@ export async function upsertChat(
         data: {
           id: dto.id,
           title: dto.title,
-          documentName: dto.documentName,
-          documentText: dto.documentText,
+          documentName,
+          documentText,
           analysis: dto.analysis,
           userId,
           createdAt,
@@ -114,9 +124,9 @@ export async function upsertChat(
     }
 
     await tx.document.deleteMany({ where: { chatId: dto.id } });
-    if (dto.documents.length) {
+    if (documentsToSave.length) {
       await tx.document.createMany({
-        data: dto.documents.map((d, index) => ({
+        data: documentsToSave.map((d, index) => ({
           chatId: dto.id,
           fileName: d.fileName,
           text: d.text,
@@ -192,18 +202,34 @@ function parseDate(value: string) {
   return Number.isNaN(date.getTime()) ? new Date() : date;
 }
 
-function containsAllDocuments(
-  nextDocuments: DocumentPartDTO[],
-  existingDocuments: DocumentPartDTO[],
-) {
-  const remaining = nextDocuments.map((document) => documentKey(document));
+function mergeDocuments(existingDocuments: DocumentPartDTO[], nextDocuments: DocumentPartDTO[]) {
+  const merged = [...existingDocuments];
+  const seen = new Set(existingDocuments.map((document) => documentKey(document)));
 
-  return existingDocuments.every((document) => {
-    const index = remaining.indexOf(documentKey(document));
-    if (index === -1) return false;
-    remaining.splice(index, 1);
-    return true;
+  nextDocuments.forEach((document) => {
+    const key = documentKey(document);
+    if (seen.has(key)) return;
+    seen.add(key);
+    merged.push(document);
   });
+
+  return merged;
+}
+
+function mergeDocumentText(documents: DocumentPartDTO[]) {
+  return documents
+    .map((document, index) => `Document ${index + 1}: ${document.fileName}\n\n${document.text}`)
+    .join("\n\n---\n\n");
+}
+
+function documentSetName(documents: DocumentPartDTO[]) {
+  if (!documents.length) return "No document loaded";
+  if (documents.length === 1) return documents[0].fileName;
+  const visible = documents.slice(0, 2).map((document) => document.fileName).join(", ");
+  const rest = documents.length - 2;
+  return rest > 0
+    ? `${documents.length} documents: ${visible} +${rest}`
+    : `${documents.length} documents: ${visible}`;
 }
 
 function documentKey(document: DocumentPartDTO) {
