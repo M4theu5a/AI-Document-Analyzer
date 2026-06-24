@@ -1617,7 +1617,11 @@ function RisksList({ content, isLoading }: { content: string; isLoading: boolean
         return (
           <li
             key={`${entry.text}-${index}`}
-            className="flex items-start gap-2.5 pl-0.5"
+            className="flex items-start gap-2.5 rounded-[11px] border px-3.5 py-2.5"
+            style={{
+              borderColor: `color-mix(in oklab, ${entry.color} 22%, transparent)`,
+              background: `color-mix(in oklab, ${entry.color} 6%, transparent)`,
+            }}
           >
             <WarningDiamond
               className="size-4 shrink-0 mt-[3px]"

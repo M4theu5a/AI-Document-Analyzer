@@ -68,7 +68,10 @@ export async function upsertChat(
       select: {
         userId: true,
         updatedAt: true,
-        documents: { select: { id: true } },
+        documents: {
+          orderBy: { position: "asc" },
+          select: { fileName: true, text: true },
+        },
       },
     });
 
@@ -80,8 +83,8 @@ export async function upsertChat(
     if (existing) {
       if (existing.userId !== userId) return false;
       const stalePayload = existing.updatedAt.getTime() > updatedAt.getTime();
-      const appendsDocuments = dto.documents.length > existing.documents.length;
-      if (stalePayload && !(options.forceDocumentUpdate && appendsDocuments)) {
+      const keepsExistingDocuments = containsAllDocuments(dto.documents, existing.documents);
+      if (stalePayload && !(options.forceDocumentUpdate && keepsExistingDocuments)) {
         return false;
       }
 
@@ -187,4 +190,22 @@ function asString(value: unknown, fallback: string) {
 function parseDate(value: string) {
   const date = new Date(value);
   return Number.isNaN(date.getTime()) ? new Date() : date;
+}
+
+function containsAllDocuments(
+  nextDocuments: DocumentPartDTO[],
+  existingDocuments: DocumentPartDTO[],
+) {
+  const remaining = nextDocuments.map((document) => documentKey(document));
+
+  return existingDocuments.every((document) => {
+    const index = remaining.indexOf(documentKey(document));
+    if (index === -1) return false;
+    remaining.splice(index, 1);
+    return true;
+  });
+}
+
+function documentKey(document: DocumentPartDTO) {
+  return `${document.fileName}\u0000${document.text}`;
 }
