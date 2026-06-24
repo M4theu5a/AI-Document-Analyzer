@@ -98,6 +98,7 @@ export default function Home() {
   const [activeChatId, setActiveChatId] = useState("");
   const [draftDocumentId, setDraftDocumentId] = useState("");
   const [hasLoadedChats, setHasLoadedChats] = useState(false);
+  const [hasCheckedAuth, setHasCheckedAuth] = useState(false);
   const [isExtracting, setIsExtracting] = useState(false);
   const [isAnalyzing, setIsAnalyzing] = useState(false);
   const [isAnswering, setIsAnswering] = useState(false);
@@ -147,6 +148,7 @@ export default function Home() {
 
   const hasDocument = Boolean(documentText.trim());
   const hasAnalysis = Boolean(rawAnalysis.trim());
+  const isBootstrapping = !hasLoadedChats || !hasCheckedAuth;
   const workspaceTitle = activeChat ? chatDisplayName(activeChat) : "Untitled document";
   const hasChatMessages = Boolean(activeChat?.messages.length);
   const isDarkTheme = themeMode === "dark";
@@ -210,17 +212,20 @@ export default function Home() {
     (async () => {
       try {
         const response = await fetch("/api/auth/me", { cache: "no-store" });
-        if (!response.ok) return;
-        const payload = (await response.json()) as {
-          user?: { name: string | null; email: string } | null;
-        };
-        if (!cancelled && payload.user) {
-          authedRef.current = true;
-          setCurrentUser(payload.user);
-          void refreshTokenStatus();
+        if (response.ok) {
+          const payload = (await response.json()) as {
+            user?: { name: string | null; email: string } | null;
+          };
+          if (!cancelled && payload.user) {
+            authedRef.current = true;
+            setCurrentUser(payload.user);
+            void refreshTokenStatus();
+          }
         }
       } catch {
         // anonymous — browsing is allowed; login is requested when using an action
+      } finally {
+        if (!cancelled) setHasCheckedAuth(true);
       }
     })();
     return () => {
@@ -660,6 +665,10 @@ export default function Home() {
   }
 
   // ── Render ─────────────────────────────────────────────────────────────
+
+  if (isBootstrapping) {
+    return <WorkspaceBootScreen />;
+  }
 
   return (
     <div className="flex h-screen overflow-hidden bg-bg text-text">
@@ -1326,6 +1335,58 @@ export default function Home() {
 }
 
 // ── Sub-components ─────────────────────────────────────────────────────
+
+function WorkspaceBootScreen() {
+  return (
+    <div className="flex h-screen overflow-hidden bg-bg text-text" aria-label="Loading workspace">
+      <aside
+        className="w-[252px] shrink-0 flex flex-col bg-sidebar border-r border-border overflow-hidden"
+        style={{ padding: "18px 14px" }}
+      >
+        <div className="flex items-center gap-2.5">
+          <div className="size-[30px] shrink-0 rounded-[9px] bg-accent" />
+          <div className="min-w-0 flex-1 space-y-1.5">
+            <div className="skeleton-line h-3.5 w-36" />
+            <div className="skeleton-line h-2.5 w-20" />
+          </div>
+        </div>
+        <div className="skeleton-line mt-4 h-[38px] w-full rounded-[12px]" />
+        <div className="skeleton-line mt-3 h-[34px] w-full rounded-[10px]" />
+        <div className="mt-5 space-y-2">
+          <div className="skeleton-line h-3 w-16" />
+          <div className="skeleton-line h-[52px] w-full rounded-[11px]" />
+          <div className="skeleton-line h-[52px] w-full rounded-[11px]" />
+        </div>
+        <div className="mt-auto space-y-3 border-t border-border pt-3">
+          <div className="skeleton-line h-2 w-full" />
+          <div className="skeleton-line h-8 w-full rounded-[10px]" />
+          <div className="skeleton-line h-9 w-full rounded-[10px]" />
+        </div>
+      </aside>
+      <main
+        className="flex-1 min-w-0 flex flex-col"
+        style={{ gap: "var(--gap)", padding: "var(--pad)" }}
+      >
+        <div className="rounded-panel bg-panel border border-border shadow-card" style={{ padding: "18px" }}>
+          <div className="skeleton-line h-4 w-44" />
+          <div className="skeleton-line mt-2 h-2.5 w-28" />
+        </div>
+        <div className="flex flex-1 min-h-0" style={{ gap: "var(--gap)" }}>
+          <div className="flex-1 rounded-panel bg-panel border border-border shadow-card p-5">
+            <div className="skeleton-line h-5 w-56" />
+            <div className="skeleton-line mt-4 h-3 w-11/12" />
+            <div className="skeleton-line mt-3 h-3 w-full" />
+            <div className="skeleton-line mt-3 h-3 w-9/12" />
+          </div>
+          <div className="w-[396px] rounded-panel bg-panel border border-border shadow-card p-5">
+            <div className="skeleton-line h-5 w-36" />
+            <div className="skeleton-line mt-5 h-28 w-full rounded-[14px]" />
+          </div>
+        </div>
+      </main>
+    </div>
+  );
+}
 
 function SectionPill({ color, label }: { color: "accent" | "ok" | "danger"; label: string }) {
   return (
