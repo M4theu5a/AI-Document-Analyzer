@@ -3,10 +3,10 @@
 import {
   WarningCircleIcon as AlertCircle,
   ArrowRightIcon as ArrowRight,
-  CheckCircleIcon as CheckCircle2,
   CoinsIcon as Coins,
   DownloadSimpleIcon as Download,
   FileTextIcon as FileText,
+  KeyIcon as Key,
   CircleNotchIcon as Loader2,
   SignOutIcon as LogOut,
   ChatCircleIcon as MessageCircle,
@@ -21,6 +21,7 @@ import {
   TrashIcon as Trash2,
   UploadSimpleIcon as Upload,
   UserIcon as UserRound,
+  WarningDiamondIcon as WarningDiamond,
 } from "@phosphor-icons/react";
 import {
   ChangeEvent,
@@ -1359,14 +1360,15 @@ function KeyPointsList({ content, isLoading }: { content: string; isLoading: boo
           style={{ padding: "10px 14px", background: "var(--inset)" }}
         >
           <span
-            className="shrink-0 mt-[1px] rounded-[5px] px-1.5 py-0.5 font-mono text-[9.5px] font-bold uppercase tracking-[0.07em]"
+            className="flex size-7 shrink-0 items-center justify-center rounded-[8px]"
             style={{
               color: "var(--ok)",
-              background: "color-mix(in oklab, var(--ok) 10%, transparent)",
+              background: "color-mix(in oklab, var(--ok) 12%, transparent)",
               border: "1px solid color-mix(in oklab, var(--ok) 22%, transparent)",
             }}
+            aria-hidden
           >
-            Key
+            <Key className="size-3.5" weight="bold" />
           </span>
           <span className="text-[13px] leading-[1.5] text-text flex-1 min-w-0">
             {renderInline(bullet)}
@@ -1399,9 +1401,11 @@ function RisksList({ content, isLoading }: { content: string; isLoading: boolean
             style={{ background: "var(--danger)" }}
           />
           <span className="flex items-start gap-2.5 flex-1 min-w-0 px-3.5 py-2.5">
-            <CheckCircle2
+            <WarningDiamond
               className="size-4 shrink-0 mt-[2px]"
               style={{ color: "var(--danger)" }}
+              weight="fill"
+              aria-hidden
             />
             <span className="text-[13px] leading-[1.5] text-text">
               {renderInline(bullet)}
