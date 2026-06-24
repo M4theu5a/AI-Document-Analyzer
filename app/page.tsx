@@ -417,10 +417,6 @@ export default function Home() {
       const mergedText = mergeDocumentText(merged);
       const mergedName = documentSetName(merged);
 
-      setDocumentText(mergedText);
-      setDocumentName(mergedName);
-      setIntakeMode("upload");
-      setRawAnalysis("");
       const updatedChat = {
         ...session,
         documentName: mergedName,
@@ -429,12 +425,18 @@ export default function Home() {
         analysis: "",
         updatedAt: new Date().toISOString(),
       };
+      if (authedRef.current && !(await saveChat(updatedChat))) {
+        throw new Error("Could not save the updated document set. Please try again.");
+      }
+
+      setDocumentText(mergedText);
+      setDocumentName(mergedName);
+      setIntakeMode("upload");
+      setRawAnalysis("");
       updateChat(session.id, (chat) => ({ ...chat, ...updatedChat }));
       setDraftDocumentId("");
       setShowDocumentsMenu(false);
-      if (authedRef.current && (await saveChat(updatedChat))) {
-        lastSyncedRef.current.set(updatedChat.id, serializeChat(updatedChat));
-      }
+      lastSyncedRef.current.set(updatedChat.id, serializeChat(updatedChat));
       void runAnalysis(mergedText, session.id);
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : "Document upload failed.");

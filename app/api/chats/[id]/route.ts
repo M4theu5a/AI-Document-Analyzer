@@ -16,7 +16,10 @@ export async function PUT(
     if (!dto || dto.id !== id) {
       return NextResponse.json({ error: "Invalid chat payload." }, { status: 400 });
     }
-    await upsertChat(user.id, dto);
+    const saved = await upsertChat(user.id, dto);
+    if (!saved) {
+      return NextResponse.json({ ok: false, stale: true }, { status: 409 });
+    }
     return NextResponse.json({ ok: true });
   } catch (error) {
     console.error("Failed to save chat", error);

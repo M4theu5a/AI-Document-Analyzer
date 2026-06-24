@@ -58,15 +58,15 @@ export async function upsertChat(userId: string, dto: ChatSessionDTO) {
   const createdAt = parseDate(dto.createdAt);
   const updatedAt = parseDate(dto.updatedAt);
 
-  await prisma.$transaction(async (tx) => {
+  return prisma.$transaction(async (tx) => {
     const existing = await tx.chat.findUnique({
       where: { id: dto.id },
       select: { userId: true, updatedAt: true },
     });
 
     if (existing) {
-      if (existing.userId !== userId) return;
-      if (existing.updatedAt.getTime() > updatedAt.getTime()) return;
+      if (existing.userId !== userId) return false;
+      if (existing.updatedAt.getTime() > updatedAt.getTime()) return false;
 
       await tx.chat.update({
         where: { id: dto.id },
@@ -117,6 +117,8 @@ export async function upsertChat(userId: string, dto: ChatSessionDTO) {
         })),
       });
     }
+
+    return true;
   });
 }
 
