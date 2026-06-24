@@ -18,6 +18,28 @@ export const metadata: Metadata = {
   title: "Document Intelligence Workspace",
   description:
     "A document intelligence workspace for summaries, key points and risk signals.",
+  metadataBase: new URL(process.env.NEXT_PUBLIC_SITE_URL ?? "https://docsignal.vercel.app"),
+  openGraph: {
+    title: "Document Intelligence Workspace",
+    description:
+      "Upload documents, extract key signals, review risks and continue the conversation.",
+    type: "website",
+    images: [
+      {
+        url: "/opengraph-image",
+        width: 1200,
+        height: 630,
+        alt: "Document Intelligence Workspace preview",
+      },
+    ],
+  },
+  twitter: {
+    card: "summary_large_image",
+    title: "Document Intelligence Workspace",
+    description:
+      "Upload documents, extract key signals, review risks and continue the conversation.",
+    images: ["/opengraph-image"],
+  },
 };
 
 export default function RootLayout({
