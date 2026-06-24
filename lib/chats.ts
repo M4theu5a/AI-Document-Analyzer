@@ -59,26 +59,39 @@ export async function upsertChat(userId: string, dto: ChatSessionDTO) {
   const updatedAt = parseDate(dto.updatedAt);
 
   await prisma.$transaction(async (tx) => {
-    await tx.chat.upsert({
+    const existing = await tx.chat.findUnique({
       where: { id: dto.id },
-      create: {
-        id: dto.id,
-        title: dto.title,
-        documentName: dto.documentName,
-        documentText: dto.documentText,
-        analysis: dto.analysis,
-        userId,
-        createdAt,
-        updatedAt,
-      },
-      update: {
-        title: dto.title,
-        documentName: dto.documentName,
-        documentText: dto.documentText,
-        analysis: dto.analysis,
-        updatedAt,
-      },
+      select: { userId: true, updatedAt: true },
     });
+
+    if (existing) {
+      if (existing.userId !== userId) return;
+      if (existing.updatedAt.getTime() > updatedAt.getTime()) return;
+
+      await tx.chat.update({
+        where: { id: dto.id },
+        data: {
+          title: dto.title,
+          documentName: dto.documentName,
+          documentText: dto.documentText,
+          analysis: dto.analysis,
+          updatedAt,
+        },
+      });
+    } else {
+      await tx.chat.create({
+        data: {
+          id: dto.id,
+          title: dto.title,
+          documentName: dto.documentName,
+          documentText: dto.documentText,
+          analysis: dto.analysis,
+          userId,
+          createdAt,
+          updatedAt,
+        },
+      });
+    }
 
     await tx.document.deleteMany({ where: { chatId: dto.id } });
     if (dto.documents.length) {

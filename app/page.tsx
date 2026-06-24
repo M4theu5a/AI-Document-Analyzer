@@ -270,8 +270,9 @@ export default function Home() {
       chats.filter(hasMeaningfulChat).forEach((chat) => {
         const snapshot = serializeChat(chat);
         if (lastSyncedRef.current.get(chat.id) === snapshot) return;
-        lastSyncedRef.current.set(chat.id, snapshot);
-        void saveChat(chat);
+        void saveChat(chat).then((saved) => {
+          if (saved) lastSyncedRef.current.set(chat.id, snapshot);
+        });
       });
     }, 700);
     return () => clearTimeout(timer);
@@ -420,16 +421,20 @@ export default function Home() {
       setDocumentName(mergedName);
       setIntakeMode("upload");
       setRawAnalysis("");
-      updateChat(session.id, (chat) => ({
-        ...chat,
+      const updatedChat = {
+        ...session,
         documentName: mergedName,
         documentText: mergedText,
         documents: merged,
         analysis: "",
         updatedAt: new Date().toISOString(),
-      }));
+      };
+      updateChat(session.id, (chat) => ({ ...chat, ...updatedChat }));
       setDraftDocumentId("");
       setShowDocumentsMenu(false);
+      if (authedRef.current && (await saveChat(updatedChat))) {
+        lastSyncedRef.current.set(updatedChat.id, serializeChat(updatedChat));
+      }
       void runAnalysis(mergedText, session.id);
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : "Document upload failed.");
@@ -1999,13 +2004,15 @@ async function fetchChats(): Promise<ChatSession[]> {
 
 async function saveChat(chat: ChatSession) {
   try {
-    await fetch(`/api/chats/${chat.id}`, {
+    const response = await fetch(`/api/chats/${chat.id}`, {
       method: "PUT",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(chat),
     });
+    return response.ok;
   } catch {
     // best-effort: the next change re-attempts the sync
+    return false;
   }
 }
 
