@@ -1162,7 +1162,7 @@ export default function Home() {
               </div>
 
               {activeDocuments.length > 0 && (
-                <div className="relative shrink-0" ref={documentsMenuRef}>
+                <div className="relative shrink-0 order-[5]" ref={documentsMenuRef}>
                   <button
                     className="flex items-center gap-1.5 rounded-[10px] border border-border px-3 py-1.5 text-[12.5px] font-semibold text-text-muted transition hover:border-accent hover:text-accent"
                     onClick={() => setShowDocumentsMenu((current) => !current)}
@@ -1259,7 +1259,7 @@ export default function Home() {
               </button>
 
               <button
-                className="flex items-center gap-1.5 rounded-[10px] border border-border px-3 py-1.5 text-[12.5px] font-semibold text-text-muted transition hover:border-accent hover:text-accent shrink-0"
+                className="flex items-center gap-1.5 rounded-[10px] border border-border px-3 py-1.5 text-[12.5px] font-semibold text-text-muted transition hover:border-accent hover:text-accent shrink-0 order-[6]"
                 onClick={handleBrowseFiles}
                 type="button"
               >
@@ -1593,18 +1593,16 @@ function RisksList({ content, isLoading }: { content: string; isLoading: boolean
         if (heading) {
           return (
             <li
-              key={`${heading}-${index}`}
-              className="pt-2 first:pt-0"
+              key={`${heading.label}-${index}`}
+              className="pb-0.5 pt-3 first:pt-0"
             >
               <span
-                className="inline-flex items-center rounded-full px-2.5 py-1 font-mono text-[10px] font-bold uppercase tracking-[0.08em]"
+                className="block font-mono text-[10.5px] font-bold uppercase tracking-[0.14em]"
                 style={{
                   color: heading.color,
-                  background: `color-mix(in oklab, ${heading.color} 10%, transparent)`,
-                  border: `1px solid color-mix(in oklab, ${heading.color} 24%, transparent)`,
                 }}
               >
-                {heading.label}
+                {heading.label}:
               </span>
             </li>
           );
@@ -1666,14 +1664,19 @@ function StreamingCursor() {
 }
 
 function getRiskSectionHeading(text: string) {
+  const clean = text.replace(/\*\*/g, "").trim();
   const normalized = text
     .replace(/\*\*/g, "")
     .replace(/:$/, "")
     .trim()
     .toLowerCase();
 
-  if (["risk", "risks", "key risks", "identified risks"].includes(normalized)) {
+  if (["risk", "risks", "key risks", "identified risks", "potential risks"].includes(normalized)) {
     return { label: "Risks", color: "var(--danger)" };
+  }
+
+  if (["missing information", "missing info", "information gaps", "gaps"].includes(normalized)) {
+    return { label: "Missing information", color: "var(--warning)" };
   }
 
   if (
@@ -1689,6 +1692,13 @@ function getRiskSectionHeading(text: string) {
     ].includes(normalized)
   ) {
     return { label: "Actions", color: "var(--accent)" };
+  }
+
+  if (clean.endsWith(":") && clean.length <= 42 && !/[.!?]/.test(clean.slice(0, -1))) {
+    return {
+      label: clean.slice(0, -1).trim(),
+      color: "var(--text-muted)",
+    };
   }
 
   return null;
