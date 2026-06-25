@@ -26,8 +26,8 @@ PDF export, light/dark themes, and production-ready social preview metadata.
   user in PostgreSQL.
 - Monthly token quota: each user has a configurable monthly allowance.
 - Export: download the structured review and conversation history as PDF or JSON.
-- Keyboard shortcuts: `Ctrl+K` focuses search, `Ctrl+N` creates a new document,
-  and `Ctrl+Enter` sends a question.
+- Keyboard shortcuts: `Ctrl+K` focuses search, `Ctrl+Alt+N` creates a new
+  document, and `Ctrl+Enter` sends a question.
 - Error boundary: unexpected client errors render a recovery screen.
 - Polished UI: responsive workspace layout, custom favicon, social preview
   image, and light/dark theme support.

@@ -357,7 +357,9 @@ export default function Home() {
         return;
       }
 
-      if (key === "n") {
+      const isReliableNewDocumentShortcut = key === "n" && event.altKey && !event.shiftKey;
+      const isLegacyNewDocumentShortcut = key === "n" && !event.altKey && !event.shiftKey;
+      if (isReliableNewDocumentShortcut || isLegacyNewDocumentShortcut) {
         event.preventDefault();
         if (!requireAuth(() => createAndActivateChat())) return;
         createAndActivateChat();
@@ -371,8 +373,8 @@ export default function Home() {
       }
     }
 
-    window.addEventListener("keydown", handleShortcut);
-    return () => window.removeEventListener("keydown", handleShortcut);
+    window.addEventListener("keydown", handleShortcut, true);
+    return () => window.removeEventListener("keydown", handleShortcut, true);
   }, [activeChat?.messages.length, hasDocument, isAnswering, pushToast, question]);
 
   // ── Handlers ──────────────────────────────────────────────────────────
@@ -998,6 +1000,7 @@ export default function Home() {
             if (!requireAuth(() => createAndActivateChat())) return;
             createAndActivateChat();
           }}
+          title="New document (Ctrl+Alt+N)"
           type="button"
         >
           <Plus className="size-4" />
