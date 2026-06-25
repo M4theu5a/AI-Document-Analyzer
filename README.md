@@ -25,8 +25,7 @@ PDF export, light/dark themes, and production-ready social preview metadata.
 - Persistent workspaces: chats, documents, messages, and analysis are saved per
   user in PostgreSQL.
 - Monthly token quota: each user has a configurable monthly allowance.
-- Export: download the structured review as PDF, and conversation history as
-  PDF or JSON.
+- Export: download the structured review and conversation history as PDF or JSON.
 - Keyboard shortcuts: `Ctrl+K` focuses search, `Ctrl+N` creates a new document,
   and `Ctrl+Enter` sends a question.
 - Error boundary: unexpected client errors render a recovery screen.
@@ -184,11 +183,15 @@ app/
   twitter-image.tsx
 components/
   AuthForm.tsx
+  review/
+    ReviewContent.tsx
 lib/
   analysis.ts
   auth.ts
   chats.ts
+  exports.ts
   prisma.ts
+  risk-groups.ts
   tokens.ts
 prisma/
   migrations/

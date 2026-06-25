@@ -7,7 +7,6 @@ import {
   CoinsIcon as Coins,
   DownloadSimpleIcon as Download,
   FileTextIcon as FileText,
-  KeyIcon as Key,
   CircleNotchIcon as Loader2,
   SignOutIcon as LogOut,
   ChatCircleIcon as MessageCircle,
@@ -22,7 +21,6 @@ import {
   TrashIcon as Trash2,
   UploadSimpleIcon as Upload,
   UserIcon as UserRound,
-  WarningDiamondIcon as WarningDiamond,
 } from "@phosphor-icons/react";
 import {
   ChangeEvent,
@@ -36,6 +34,21 @@ import {
   useState,
 } from "react";
 import { normalizeBullets, parseAnalysisSections } from "@/lib/analysis";
+import {
+  KeyPointsList,
+  RisksList,
+  StreamingCursor,
+  SummaryContent,
+} from "@/components/review/ReviewContent";
+import {
+  buildAnalysisExport,
+  buildAnalysisJsonExport,
+  buildChatExport,
+  buildChatJsonExport,
+  downloadJson,
+  downloadPdf,
+  toFileSlug,
+} from "@/lib/exports";
 import { AuthForm, type AuthUser } from "@/components/AuthForm";
 
 type IntakeMode = "upload" | "paste";
@@ -105,6 +118,7 @@ export default function Home() {
   const [tokenStatus, setTokenStatus] = useState<TokenStatus | null>(null);
   const [showAuthModal, setShowAuthModal] = useState(false);
   const [showDocumentsMenu, setShowDocumentsMenu] = useState(false);
+  const [showAnalysisExportMenu, setShowAnalysisExportMenu] = useState(false);
   const [showChatExportMenu, setShowChatExportMenu] = useState(false);
   const [activeChatId, setActiveChatId] = useState("");
   const [draftDocumentId, setDraftDocumentId] = useState("");
@@ -125,6 +139,7 @@ export default function Home() {
   const questionFormRef = useRef<HTMLFormElement>(null);
   const chatScrollRef = useRef<HTMLDivElement>(null);
   const documentsMenuRef = useRef<HTMLDivElement>(null);
+  const analysisExportMenuRef = useRef<HTMLDivElement>(null);
   const chatExportMenuRef = useRef<HTMLDivElement>(null);
   const activeChatRef = useRef<ChatSession | undefined>(undefined);
   const wasDropRef = useRef(false);
@@ -363,19 +378,22 @@ export default function Home() {
   // ── Handlers ──────────────────────────────────────────────────────────
 
   useEffect(() => {
-    if (!showDocumentsMenu && !showChatExportMenu) return;
+    if (!showDocumentsMenu && !showAnalysisExportMenu && !showChatExportMenu) return;
 
     function handlePointerDown(event: MouseEvent) {
       const target = event.target;
       if (target instanceof Node && documentsMenuRef.current?.contains(target)) return;
+      if (target instanceof Node && analysisExportMenuRef.current?.contains(target)) return;
       if (target instanceof Node && chatExportMenuRef.current?.contains(target)) return;
       setShowDocumentsMenu(false);
+      setShowAnalysisExportMenu(false);
       setShowChatExportMenu(false);
     }
 
     function handleKeyDown(event: KeyboardEvent) {
       if (event.key === "Escape") {
         setShowDocumentsMenu(false);
+        setShowAnalysisExportMenu(false);
         setShowChatExportMenu(false);
       }
     }
@@ -386,7 +404,7 @@ export default function Home() {
       document.removeEventListener("mousedown", handlePointerDown);
       document.removeEventListener("keydown", handleKeyDown);
     };
-  }, [showChatExportMenu, showDocumentsMenu]);
+  }, [showAnalysisExportMenu, showChatExportMenu, showDocumentsMenu]);
 
   async function refreshTokenStatus() {
     try {
@@ -487,6 +505,9 @@ export default function Home() {
     event.stopPropagation();
     setIsDraggingFiles(false);
     wasDropRef.current = true;
+    window.setTimeout(() => {
+      wasDropRef.current = false;
+    }, 350);
     if (isExtracting) return;
 
     const files = Array.from(event.dataTransfer.files ?? []);
@@ -847,13 +868,24 @@ export default function Home() {
     });
   }
 
-  async function exportAnalysis() {
+  async function exportAnalysisPdf() {
+    setShowAnalysisExportMenu(false);
     await downloadPdf(
       analysisExport,
       `${toFileSlug(documentName)}-analysis.pdf`,
       "Document Intelligence Review",
     );
     pushToast("Analysis exported as PDF.", "success");
+  }
+
+  function exportAnalysisJson() {
+    if (!hasAnalysis) return;
+    setShowAnalysisExportMenu(false);
+    downloadJson(
+      buildAnalysisJsonExport(documentName, sections, rawAnalysis),
+      `${toFileSlug(documentName)}-analysis.json`,
+    );
+    pushToast("Analysis exported as JSON.", "success");
   }
 
   async function exportChat() {
@@ -1517,15 +1549,48 @@ export default function Home() {
                       Review Workspace
                     </p>
                   </div>
-                  <button
-                    className="flex items-center gap-1.5 rounded-[10px] border border-border px-3 py-1.5 text-[12.5px] font-semibold text-text-muted transition hover:border-accent hover:text-accent disabled:opacity-40 disabled:cursor-not-allowed shrink-0"
-                    disabled={!hasAnalysis || isAnalyzing}
-                    onClick={exportAnalysis}
-                    type="button"
-                  >
-                    <Download className="size-3.5" />
-                    Export PDF
-                  </button>
+                  <div className="relative shrink-0" ref={analysisExportMenuRef}>
+                    <button
+                      className="flex items-center gap-1.5 rounded-[10px] border border-border px-3 py-1.5 text-[12.5px] font-semibold text-text-muted transition hover:border-accent hover:text-accent disabled:opacity-40 disabled:cursor-not-allowed"
+                      disabled={!hasAnalysis || isAnalyzing}
+                      onClick={() => setShowAnalysisExportMenu((current) => !current)}
+                      type="button"
+                      aria-expanded={showAnalysisExportMenu}
+                      aria-haspopup="menu"
+                    >
+                      <Download className="size-3.5" />
+                      Export
+                      <ChevronDown
+                        className={`size-3 transition ${showAnalysisExportMenu ? "rotate-180" : ""}`}
+                      />
+                    </button>
+
+                    {showAnalysisExportMenu && (
+                      <div
+                        className="absolute right-0 top-[calc(100%+8px)] z-30 w-[180px] overflow-hidden rounded-[12px] border border-border bg-panel p-1.5 shadow-card"
+                        role="menu"
+                      >
+                        <button
+                          className="flex w-full items-center justify-between rounded-[9px] px-2.5 py-2 text-left text-[12.5px] font-semibold text-text-muted transition hover:bg-inset hover:text-text"
+                          onClick={exportAnalysisPdf}
+                          role="menuitem"
+                          type="button"
+                        >
+                          PDF
+                          <span className="font-mono text-[9px] text-muted">.pdf</span>
+                        </button>
+                        <button
+                          className="flex w-full items-center justify-between rounded-[9px] px-2.5 py-2 text-left text-[12.5px] font-semibold text-text-muted transition hover:bg-inset hover:text-text"
+                          onClick={exportAnalysisJson}
+                          role="menuitem"
+                          type="button"
+                        >
+                          JSON
+                          <span className="font-mono text-[9px] text-muted">.json</span>
+                        </button>
+                      </div>
+                    )}
+                  </div>
                 </div>
 
                 {/* Tab bar */}
@@ -1567,16 +1632,7 @@ export default function Home() {
                   style={{ padding: "var(--pad)" }}
                 >
                   {activeTab === "summary" ? (
-                    currentContent ? (
-                      <p className="fade-in-up whitespace-pre-wrap text-[13px] leading-[1.6] text-text">
-                        {renderInline(currentContent)}
-                        {isAnalyzing && <StreamingCursor />}
-                      </p>
-                    ) : isAnalyzing ? (
-                      <SkeletonLines />
-                    ) : (
-                      <EmptyTabState />
-                    )
+                    <SummaryContent content={currentContent} isLoading={isAnalyzing} />
                   ) : activeTab === "keyPoints" ? (
                     <KeyPointsList content={currentContent} isLoading={isAnalyzing} />
                   ) : (
@@ -1967,234 +2023,6 @@ function ToastStack({
   );
 }
 
-function KeyPointsList({ content, isLoading }: { content: string; isLoading: boolean }) {
-  const bullets = normalizeBullets(content);
-  if (!bullets.length) {
-    return isLoading ? <SkeletonLines /> : <EmptyTabState />;
-  }
-  return (
-    <ul className="fade-in-up space-y-2">
-      {bullets.map((bullet, index) => (
-        <li
-          key={bullet}
-          className="flex items-start gap-3 rounded-[11px] border border-border"
-          style={{ padding: "10px 14px", background: "var(--inset)" }}
-        >
-          <span
-            className="flex size-7 shrink-0 items-center justify-center rounded-[8px]"
-            style={{
-              color: "var(--ok)",
-              background: "color-mix(in oklab, var(--ok) 12%, transparent)",
-              border: "1px solid color-mix(in oklab, var(--ok) 22%, transparent)",
-            }}
-            aria-hidden
-          >
-            <Key className="size-3.5" weight="bold" />
-          </span>
-          <span className="text-[13px] leading-[1.5] text-text flex-1 min-w-0">
-            {renderInline(bullet)}
-            {isLoading && index === bullets.length - 1 && <StreamingCursor />}
-          </span>
-        </li>
-      ))}
-    </ul>
-  );
-}
-
-function RisksList({ content, isLoading }: { content: string; isLoading: boolean }) {
-  const bullets = normalizeBullets(content);
-  if (!bullets.length) {
-    return isLoading ? <SkeletonLines /> : <EmptyTabState />;
-  }
-  const entries = buildRiskListEntries(bullets);
-  return (
-    <ul className="fade-in-up space-y-2.5">
-      {entries.map((entry, index) => {
-        if (entry.type === "heading") {
-          return (
-            <li
-              key={`${entry.heading.label}-${index}`}
-              className="pt-4 first:pt-0"
-            >
-              <span
-                className="block text-[14px] font-bold text-text"
-                style={{
-                  color: entry.heading.color,
-                }}
-              >
-                {entry.heading.label}
-              </span>
-            </li>
-          );
-        }
-
-        return (
-          <li
-            key={`${entry.text}-${index}`}
-            className="flex items-start gap-2.5 rounded-[11px] border px-3.5 py-2.5"
-            style={{
-              borderColor: `color-mix(in oklab, ${entry.color} 22%, transparent)`,
-              background: `color-mix(in oklab, ${entry.color} 6%, transparent)`,
-            }}
-          >
-            <WarningDiamond
-              className="size-4 shrink-0 mt-[3px]"
-              style={{ color: entry.color }}
-              weight="fill"
-              aria-hidden
-            />
-            <span className="text-[13px] leading-[1.6] text-text">
-              {renderInline(entry.text)}
-              {isLoading && index === entries.length - 1 && <StreamingCursor />}
-            </span>
-          </li>
-        );
-      })}
-    </ul>
-  );
-}
-
-function EmptyTabState() {
-  return (
-    <p className="text-[13.5px] text-muted">
-      Run an analysis to populate this section.
-    </p>
-  );
-}
-
-function SkeletonLines() {
-  return (
-    <div className="space-y-3" aria-label="Loading content">
-      <div className="skeleton-line w-11/12" />
-      <div className="skeleton-line w-full" />
-      <div className="skeleton-line w-9/12" />
-      <div className="skeleton-line w-7/12" />
-    </div>
-  );
-}
-
-function StreamingCursor() {
-  return <span aria-hidden className="streaming-cursor" />;
-}
-
-type RiskSectionHeading = {
-  label: string;
-  color: string;
-};
-
-type RiskListEntry =
-  | { type: "heading"; heading: RiskSectionHeading }
-  | { type: "item"; text: string; color: string };
-
-function buildRiskListEntries(bullets: string[]): RiskListEntry[] {
-  const entries: RiskListEntry[] = [];
-  let currentHeading = getRiskSectionHeading("Risks");
-
-  for (const bullet of bullets) {
-    const section = splitRiskSectionPrefix(bullet);
-
-    if (section) {
-      currentHeading = section.heading;
-      pushRiskHeading(entries, section.heading);
-      splitRiskSectionItems(section.body).forEach((item) => {
-        entries.push({ type: "item", text: item, color: section.heading.color });
-      });
-      continue;
-    }
-
-    const heading = getRiskSectionHeading(bullet);
-    if (heading) {
-      currentHeading = heading;
-      pushRiskHeading(entries, heading);
-      continue;
-    }
-
-    entries.push({
-      type: "item",
-      text: bullet,
-      color: currentHeading?.color ?? "var(--danger)",
-    });
-  }
-
-  return entries;
-}
-
-function pushRiskHeading(entries: RiskListEntry[], heading: RiskSectionHeading) {
-  const last = entries[entries.length - 1];
-  if (last?.type === "heading" && last.heading.label === heading.label) return;
-  entries.push({ type: "heading", heading });
-}
-
-function splitRiskSectionPrefix(text: string) {
-  const clean = text.replace(/\*\*/g, "").trim();
-  const separatorIndex = clean.indexOf(":");
-  if (separatorIndex <= 0 || separatorIndex > 42) return null;
-
-  const label = clean.slice(0, separatorIndex).trim();
-  if (!label || /[.!?]/.test(label)) return null;
-
-  const heading = getRiskSectionHeading(label);
-  if (!heading) return null;
-
-  const body = clean.slice(separatorIndex + 1).trim();
-  return body ? { heading, body } : null;
-}
-
-function splitRiskSectionItems(text: string) {
-  const questionParts = text.match(/[^?]+(?:\?|$)/g);
-  const pieces = text.includes("?") && questionParts ? questionParts : text.split(";");
-  return pieces.map((piece) => piece.trim()).filter(Boolean);
-}
-
-function getRiskSectionHeading(text: string) {
-  const clean = text.replace(/\*\*/g, "").trim();
-  const normalized = text
-    .replace(/\*\*/g, "")
-    .replace(/:$/, "")
-    .trim()
-    .toLowerCase();
-
-  if (["risk", "risks", "key risks", "identified risks", "potential risks"].includes(normalized)) {
-    return { label: "Risks", color: "var(--danger)" };
-  }
-
-  if (["missing information", "missing info", "information gaps", "gaps"].includes(normalized)) {
-    return { label: "Missing information", color: "var(--warning)" };
-  }
-
-  if (["follow-up question", "follow-up questions", "follow up question", "follow up questions"].includes(normalized)) {
-    return { label: "Follow-up questions", color: "var(--accent)" };
-  }
-
-  if (["suggested next action", "suggested next actions", "suggested actions"].includes(normalized)) {
-    return { label: "Suggested next actions", color: "var(--accent)" };
-  }
-
-  if (
-    [
-      "action",
-      "actions",
-      "recommended action",
-      "recommended actions",
-      "next action",
-      "next actions",
-      "mitigation",
-      "mitigations",
-    ].includes(normalized)
-  ) {
-    return { label: "Actions", color: "var(--accent)" };
-  }
-
-  if (clean.endsWith(":") && clean.length <= 42 && !/[.!?]/.test(clean.slice(0, -1))) {
-    return {
-      label: clean.slice(0, -1).trim(),
-      color: "var(--text-muted)",
-    };
-  }
-
-  return null;
-}
-
 function TypingDots() {
   return (
     <span className="flex items-center gap-1 py-0.5" aria-label="Assistant is typing">
@@ -2316,120 +2144,6 @@ async function streamFromApi(
   if (!received.trim()) {
     throw new Error("The analysis finished without returning text. Please try again.");
   }
-}
-
-function buildAnalysisExport(
-  documentName: string,
-  sections: ReturnType<typeof parseAnalysisSections>,
-  rawAnalysis: string,
-) {
-  if (!rawAnalysis.trim()) return "";
-  const generatedAt = new Date().toLocaleString();
-  return `# Document Intelligence Review\n\nDocument: ${documentName}\nGenerated: ${generatedAt}\n\n## Summary\n\n${sections.summary || "No summary was generated."}\n\n## Key Points\n\n${formatMarkdownBullets(sections.keyPoints)}\n\n## Risks & Actions\n\n${formatMarkdownBullets(sections.risksActions)}\n`;
-}
-
-function buildChatExport(chat?: ChatSession) {
-  if (!chat?.messages.length) return "";
-  const generatedAt = new Date().toLocaleString();
-  const messages = chat.messages
-    .map((m) => `### ${m.role === "user" ? "User" : "Assistant"}\n\n${m.content}`)
-    .join("\n\n");
-  return `# Document Export\n\nDocument: ${chat.documentName}\nGenerated: ${generatedAt}\n\n${messages}\n`;
-}
-
-function buildChatJsonExport(chat: ChatSession) {
-  return {
-    id: chat.id,
-    title: chatDisplayName(chat),
-    documentName: chat.documentName,
-    documents: currentDocuments(chat).map((document) => ({
-      fileName: document.fileName,
-      characters: document.text.trim().length,
-    })),
-    exportedAt: new Date().toISOString(),
-    messages: chat.messages,
-  };
-}
-
-function formatMarkdownBullets(content: string) {
-  const bullets = normalizeBullets(content);
-  return bullets.length ? bullets.map((b) => `- ${b}`).join("\n") : "No items were generated.";
-}
-
-async function downloadPdf(content: string, fileName: string, title: string) {
-  if (!content.trim()) return;
-  const { jsPDF } = await import("jspdf");
-  const doc = new jsPDF({ format: "a4", unit: "pt" });
-  const margin = 48;
-  const pageWidth = doc.internal.pageSize.getWidth();
-  const pageHeight = doc.internal.pageSize.getHeight();
-  const maxWidth = pageWidth - margin * 2;
-  let y = margin;
-  doc.setProperties({ title, subject: "Document Intelligence Workspace export", creator: "Document Intelligence Workspace" });
-  for (const rawLine of content.split("\n")) {
-    const line = sanitizePdfText(rawLine).trimEnd();
-    if (!line.trim()) { y += 10; continue; }
-    const style = getPdfLineStyle(line);
-    const printableLine = line.replace(/^#{1,3}\s*/, "");
-    doc.setFont("helvetica", style.weight);
-    doc.setFontSize(style.size);
-    const wrappedLines = doc.splitTextToSize(printableLine, maxWidth) as string[];
-    const lineHeight = style.size + 6;
-    const blockHeight = wrappedLines.length * lineHeight;
-    if (y + blockHeight > pageHeight - margin) { doc.addPage(); y = margin; }
-    for (const wl of wrappedLines) { doc.text(wl, margin, y); y += lineHeight; }
-    y += style.after;
-  }
-  doc.save(fileName);
-}
-
-function downloadJson(data: unknown, fileName: string) {
-  const blob = new Blob([JSON.stringify(data, null, 2)], { type: "application/json" });
-  const url = URL.createObjectURL(blob);
-  const anchor = document.createElement("a");
-  anchor.href = url;
-  anchor.download = fileName;
-  anchor.click();
-  URL.revokeObjectURL(url);
-}
-
-function sanitizePdfText(value: string) {
-  const replacements: Record<string, string> = {
-    "\u00a0": " ",
-    "\u00ad": "",
-    "\u2010": "-",
-    "\u2011": "-",
-    "\u2012": "-",
-    "\u2013": "-",
-    "\u2014": "-",
-    "\u2015": "-",
-    "\u2018": "'",
-    "\u2019": "'",
-    "\u201a": "'",
-    "\u201c": "\"",
-    "\u201d": "\"",
-    "\u201e": "\"",
-    "\u2022": "-",
-    "\u2026": "...",
-    "\u2212": "-",
-  };
-
-  return value
-    .normalize("NFKC")
-    .replace(/[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f]/g, "")
-    .replace(/[\u200b-\u200d\ufeff]/g, "")
-    .replace(/[\u00a0\u00ad\u2010-\u2015\u2018-\u201a\u201c-\u201e\u2022\u2026\u2212]/g, (char) => replacements[char] ?? "")
-    .replace(/[^\u0009\u000a\u000d\u0020-\u007e\u00a1-\u00ff]/g, (char) => {
-      const fallback = char.normalize("NFD").replace(/[\u0300-\u036f]/g, "");
-      return /^[\u0020-\u007e\u00a1-\u00ff]+$/.test(fallback) ? fallback : "";
-    });
-}
-
-function getPdfLineStyle(line: string) {
-  if (line.startsWith("# ")) return { size: 18, weight: "bold" as const, after: 8 };
-  if (line.startsWith("## ")) return { size: 14, weight: "bold" as const, after: 6 };
-  if (line.startsWith("### ")) return { size: 12, weight: "bold" as const, after: 4 };
-  return { size: 10, weight: "normal" as const, after: 2 };
 }
 
 function hasMeaningfulChat(chat: ChatSession) {
@@ -2605,11 +2319,3 @@ function formatTokens(value: number) {
   return String(Math.max(0, value));
 }
 
-function toFileSlug(value: string) {
-  const slug = value
-    .replace(/\.[^/.]+$/, "")
-    .toLowerCase()
-    .replace(/[^a-z0-9]+/g, "-")
-    .replace(/^-+|-+$/g, "");
-  return slug || "document";
-}
