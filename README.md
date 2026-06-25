@@ -15,13 +15,21 @@ PDF export, light/dark themes, and production-ready social preview metadata.
 - Structured review: Summary, Key Points, and Risks & Actions.
 - Grounded document chat: ask follow-up questions using the current document
   context and chat history.
+- Conversation search: filter messages inside the active document chat.
+- Question validation: live character count and length feedback before sending.
 - Streaming responses: analysis and chat answers render progressively.
+- Upload feedback: simulated progress indicators for selected files.
+- Toast notifications: success, duplicate document, export, and error feedback.
 - Auth-gated actions: visitors can browse the app, but document upload, paste,
   analysis, chat, and persistence require sign-in.
 - Persistent workspaces: chats, documents, messages, and analysis are saved per
   user in PostgreSQL.
 - Monthly token quota: each user has a configurable monthly allowance.
-- PDF export: export the structured review or the chat transcript.
+- Export: download the structured review as PDF, and conversation history as
+  PDF or JSON.
+- Keyboard shortcuts: `Ctrl+K` focuses search, `Ctrl+N` creates a new document,
+  and `Ctrl+Enter` sends a question.
+- Error boundary: unexpected client errors render a recovery screen.
 - Polished UI: responsive workspace layout, custom favicon, social preview
   image, and light/dark theme support.
 
@@ -36,20 +44,22 @@ PDF export, light/dark themes, and production-ready social preview metadata.
 | AI | DeepSeek Chat Completions API with streaming |
 | Document parsing | `pdf-parse` |
 | PDF export | `jspdf` |
-| Package manager | Bun |
+| Package manager | Bun or npm |
 
 ## Requirements
 
-- Bun 1.x
+- Bun 1.x or Node.js/npm
 - PostgreSQL database, local or hosted
 - DeepSeek API key
 
 ## Getting started
 
-Install dependencies:
+Install dependencies with your preferred package manager:
 
 ```bash
 bun install
+# or
+npm install
 ```
 
 Create a local environment file:
@@ -68,6 +78,8 @@ Start the development server:
 
 ```bash
 bun run dev
+# or
+npm run dev
 ```
 
 Open:

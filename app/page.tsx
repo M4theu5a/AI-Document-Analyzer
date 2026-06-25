@@ -26,8 +26,10 @@ import {
 } from "@phosphor-icons/react";
 import {
   ChangeEvent,
+  CSSProperties,
   DragEvent,
   FormEvent,
+  useCallback,
   useEffect,
   useMemo,
   useRef,
@@ -66,8 +68,12 @@ type ChatSession = {
 };
 
 type TokenStatus = { quota: number; used: number; remaining: number; period: string };
+type UploadProgress = { fileName: string; progress: number; status: "Uploading" | "Extracting" | "Ready" | "Error" };
+type ToastTone = "success" | "error" | "info";
+type ToastMessage = { id: string; message: string; tone: ToastTone };
 
 const THEME_STORAGE_KEY = "diw:theme";
+const QUESTION_MAX_LENGTH = 1000;
 
 const tabs: Array<{ id: ResultTab; label: string }> = [
   { id: "summary", label: "Summary" },
@@ -89,6 +95,7 @@ export default function Home() {
   const [activeTab, setActiveTab] = useState<ResultTab>("summary");
   const [question, setQuestion] = useState("");
   const [chatSearch, setChatSearch] = useState("");
+  const [chatHistorySearch, setChatHistorySearch] = useState("");
   const [themeMode, setThemeMode] = useState<ThemeMode>("light");
   const [openChatMenuId, setOpenChatMenuId] = useState("");
   const [renamingChatId, setRenamingChatId] = useState("");
@@ -98,6 +105,7 @@ export default function Home() {
   const [tokenStatus, setTokenStatus] = useState<TokenStatus | null>(null);
   const [showAuthModal, setShowAuthModal] = useState(false);
   const [showDocumentsMenu, setShowDocumentsMenu] = useState(false);
+  const [showChatExportMenu, setShowChatExportMenu] = useState(false);
   const [activeChatId, setActiveChatId] = useState("");
   const [draftDocumentId, setDraftDocumentId] = useState("");
   const [hasLoadedChats, setHasLoadedChats] = useState(false);
@@ -108,10 +116,18 @@ export default function Home() {
   const [isDraggingFiles, setIsDraggingFiles] = useState(false);
   const [error, setError] = useState("");
   const [notice, setNotice] = useState("");
+  const [uploadProgresses, setUploadProgresses] = useState<UploadProgress[]>([]);
+  const [toasts, setToasts] = useState<ToastMessage[]>([]);
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const chatSearchInputRef = useRef<HTMLInputElement>(null);
+  const chatHistorySearchInputRef = useRef<HTMLInputElement>(null);
+  const questionInputRef = useRef<HTMLInputElement>(null);
+  const questionFormRef = useRef<HTMLFormElement>(null);
   const chatScrollRef = useRef<HTMLDivElement>(null);
   const documentsMenuRef = useRef<HTMLDivElement>(null);
+  const chatExportMenuRef = useRef<HTMLDivElement>(null);
   const activeChatRef = useRef<ChatSession | undefined>(undefined);
+  const wasDropRef = useRef(false);
   // Tracks the last JSON synced to the DB per chat, so the persist effect only
   // pushes chats that actually changed.
   const lastSyncedRef = useRef<Map<string, string>>(new Map());
@@ -120,8 +136,22 @@ export default function Home() {
   const authedRef = useRef(false);
   const pendingActionRef = useRef<(() => void) | null>(null);
 
+  const dismissToast = useCallback((id: string) => {
+    setToasts((current) => current.filter((toast) => toast.id !== id));
+  }, []);
+
+  const pushToast = useCallback((message: string, tone: ToastTone = "info") => {
+    const id = createId();
+    setToasts((current) => [...current.slice(-2), { id, message, tone }]);
+    window.setTimeout(() => {
+      setToasts((current) => current.filter((toast) => toast.id !== id));
+    }, 3600);
+  }, []);
+
   const sections = useMemo(() => parseAnalysisSections(rawAnalysis), [rawAnalysis]);
   const currentContent = sections[activeTab];
+  const debouncedChatSearch = useDebouncedValue(chatSearch, 180);
+  const debouncedHistorySearch = useDebouncedValue(chatHistorySearch, 180);
   const activeChat = useMemo(
     () => chats.find((chat) => chat.id === activeChatId),
     [activeChatId, chats],
@@ -144,7 +174,7 @@ export default function Home() {
     [activeChatId, draftDocumentId, recentChats],
   );
   const filteredChats = useMemo(() => {
-    const query = chatSearch.trim().toLowerCase();
+    const query = debouncedChatSearch.trim().toLowerCase();
     if (!query) return documentChats;
     return documentChats.filter((chat) =>
       [chat.documentName, chat.title, getChatPreview(chat)]
@@ -152,7 +182,15 @@ export default function Home() {
         .toLowerCase()
         .includes(query),
     );
-  }, [chatSearch, documentChats]);
+  }, [debouncedChatSearch, documentChats]);
+  const visibleChatMessages = useMemo(() => {
+    const messages = activeChat?.messages ?? [];
+    const query = debouncedHistorySearch.trim().toLowerCase();
+    if (!query) return messages;
+    return messages.filter((message) =>
+      [message.role, message.content].join(" ").toLowerCase().includes(query),
+    );
+  }, [activeChat?.messages, debouncedHistorySearch]);
 
   const hasDocument = Boolean(documentText.trim());
   const hasAnalysis = Boolean(rawAnalysis.trim());
@@ -171,6 +209,8 @@ export default function Home() {
       ? `${documentCharTotal.toLocaleString()} total characters`
       : `${documentCharTotal.toLocaleString()} characters`;
   const isDarkTheme = themeMode === "dark";
+  const questionLength = question.length;
+  const isQuestionOverLimit = questionLength > QUESTION_MAX_LENGTH;
   const tokenPct =
     tokenStatus && tokenStatus.quota > 0
       ? Math.max(0, Math.min(100, (tokenStatus.remaining / tokenStatus.quota) * 100))
@@ -286,19 +326,58 @@ export default function Home() {
     activeChatRef.current = activeChat;
   }, [activeChat]);
 
+  useEffect(() => {
+    function handleShortcut(event: KeyboardEvent) {
+      const isModifier = event.ctrlKey || event.metaKey;
+      if (!isModifier) return;
+
+      const key = event.key.toLowerCase();
+      if (key === "k") {
+        event.preventDefault();
+        if (activeChat?.messages.length) {
+          chatHistorySearchInputRef.current?.focus();
+        } else {
+          chatSearchInputRef.current?.focus();
+        }
+        return;
+      }
+
+      if (key === "n") {
+        event.preventDefault();
+        if (!requireAuth(() => createAndActivateChat())) return;
+        createAndActivateChat();
+        pushToast("New document draft created.", "info");
+        return;
+      }
+
+      if (event.key === "Enter" && question.trim() && !isAnswering && hasDocument) {
+        event.preventDefault();
+        questionFormRef.current?.requestSubmit();
+      }
+    }
+
+    window.addEventListener("keydown", handleShortcut);
+    return () => window.removeEventListener("keydown", handleShortcut);
+  }, [activeChat?.messages.length, hasDocument, isAnswering, pushToast, question]);
+
   // ── Handlers ──────────────────────────────────────────────────────────
 
   useEffect(() => {
-    if (!showDocumentsMenu) return;
+    if (!showDocumentsMenu && !showChatExportMenu) return;
 
     function handlePointerDown(event: MouseEvent) {
       const target = event.target;
       if (target instanceof Node && documentsMenuRef.current?.contains(target)) return;
+      if (target instanceof Node && chatExportMenuRef.current?.contains(target)) return;
       setShowDocumentsMenu(false);
+      setShowChatExportMenu(false);
     }
 
     function handleKeyDown(event: KeyboardEvent) {
-      if (event.key === "Escape") setShowDocumentsMenu(false);
+      if (event.key === "Escape") {
+        setShowDocumentsMenu(false);
+        setShowChatExportMenu(false);
+      }
     }
 
     document.addEventListener("mousedown", handlePointerDown);
@@ -307,7 +386,7 @@ export default function Home() {
       document.removeEventListener("mousedown", handlePointerDown);
       document.removeEventListener("keydown", handleKeyDown);
     };
-  }, [showDocumentsMenu]);
+  }, [showChatExportMenu, showDocumentsMenu]);
 
   async function refreshTokenStatus() {
     try {
@@ -380,6 +459,11 @@ export default function Home() {
   }
 
   function handleBrowseFiles() {
+    if (wasDropRef.current) {
+      wasDropRef.current = false;
+      return;
+    }
+    if (isExtracting || uploadProgresses.length > 0) return;
     if (!requireAuth()) return;
     fileInputRef.current?.click();
   }
@@ -402,6 +486,7 @@ export default function Home() {
     event.preventDefault();
     event.stopPropagation();
     setIsDraggingFiles(false);
+    wasDropRef.current = true;
     if (isExtracting) return;
 
     const files = Array.from(event.dataTransfer.files ?? []);
@@ -415,6 +500,26 @@ export default function Home() {
     setNotice("");
     setIsExtracting(true);
     setDocumentName(buildSelectedFilesLabel(files));
+    setUploadProgresses(
+      files.map((file) => ({
+        fileName: file.name,
+        progress: 8,
+        status: "Uploading",
+      })),
+    );
+    const progressTimer = window.setInterval(() => {
+      setUploadProgresses((current) =>
+        current.map((file) =>
+          file.status === "Ready" || file.status === "Error"
+            ? file
+            : {
+                ...file,
+                progress: Math.min(file.progress + 14, 92),
+                status: file.progress > 48 ? "Extracting" : file.status,
+              },
+        ),
+      );
+    }, 220);
 
     const formData = new FormData();
     files.forEach((file) => formData.append("files", file));
@@ -442,7 +547,9 @@ export default function Home() {
       );
 
       if (duplicateCount) {
-        setNotice(buildDuplicateDocumentNotice(duplicateCount, incoming.length));
+        const duplicateNotice = buildDuplicateDocumentNotice(duplicateCount, incoming.length);
+        setNotice(duplicateNotice);
+        pushToast(duplicateNotice, "info");
       }
 
       if (duplicateCount === incoming.length) {
@@ -451,6 +558,9 @@ export default function Home() {
         setIntakeMode(session.documentText ? "paste" : "upload");
         setDraftDocumentId("");
         setShowDocumentsMenu(false);
+        setUploadProgresses((current) =>
+          current.map((file) => ({ ...file, progress: 100, status: "Ready" })),
+        );
         return;
       }
 
@@ -477,12 +587,26 @@ export default function Home() {
       setDraftDocumentId("");
       setShowDocumentsMenu(false);
       lastSyncedRef.current.set(updatedChat.id, serializeChat(updatedChat));
+      setUploadProgresses((current) =>
+        current.map((file) => ({ ...file, progress: 100, status: "Ready" })),
+      );
+      pushToast(
+        `${incoming.length - duplicateCount} document${incoming.length - duplicateCount === 1 ? "" : "s"} added.`,
+        "success",
+      );
       void runAnalysis(mergedText, session.id);
     } catch (caught) {
       setNotice("");
-      setError(caught instanceof Error ? caught.message : "Document upload failed.");
+      const message = caught instanceof Error ? caught.message : "Document upload failed.";
+      setError(message);
+      pushToast(message, "error");
+      setUploadProgresses((current) =>
+        current.map((file) => ({ ...file, status: "Error", progress: 100 })),
+      );
     } finally {
+      window.clearInterval(progressTimer);
       setIsExtracting(false);
+      window.setTimeout(() => setUploadProgresses([]), 1600);
     }
   }
 
@@ -540,6 +664,10 @@ export default function Home() {
     }
     if (!trimmedQuestion) {
       setError("Write a question first.");
+      return;
+    }
+    if (trimmedQuestion.length > QUESTION_MAX_LENGTH) {
+      setError(`Keep the question under ${QUESTION_MAX_LENGTH} characters.`);
       return;
     }
     if (!requireAuth(() => submitQuestion(trimmedQuestion))) return;
@@ -625,10 +753,12 @@ export default function Home() {
     setIntakeMode(nextDocumentText ? "paste" : "upload");
     setRawAnalysis("");
     setQuestion("");
+    setChatHistorySearch("");
     setOpenChatMenuId("");
     setRenamingChatId("");
     setRenameDraft("");
     setShowDocumentsMenu(false);
+    setShowChatExportMenu(false);
     setError("");
     setNotice("");
     return nextChat;
@@ -643,10 +773,12 @@ export default function Home() {
     setRawAnalysis(chat.analysis ?? "");
     setIntakeMode(chat.documentText ? "paste" : "upload");
     setQuestion("");
+    setChatHistorySearch("");
     setOpenChatMenuId("");
     setRenamingChatId("");
     setRenameDraft("");
     setShowDocumentsMenu(false);
+    setShowChatExportMenu(false);
     setError("");
     setNotice("");
   }
@@ -687,6 +819,7 @@ export default function Home() {
     setRenameDraft("");
     setDraftDocumentId("");
     setShowDocumentsMenu(false);
+    setShowChatExportMenu(false);
     if (lastSyncedRef.current.has(chatId)) {
       lastSyncedRef.current.delete(chatId);
       void deleteChatRemote(chatId);
@@ -720,14 +853,27 @@ export default function Home() {
       `${toFileSlug(documentName)}-analysis.pdf`,
       "Document Intelligence Review",
     );
+    pushToast("Analysis exported as PDF.", "success");
   }
 
   async function exportChat() {
+    setShowChatExportMenu(false);
     await downloadPdf(
       chatExport,
       `${toFileSlug(activeChat ? chatDisplayName(activeChat) : documentName)}-chat.pdf`,
       "Document Export",
     );
+    pushToast("Conversation exported as PDF.", "success");
+  }
+
+  function exportChatJson() {
+    if (!activeChat?.messages.length) return;
+    setShowChatExportMenu(false);
+    downloadJson(
+      buildChatJsonExport(activeChat),
+      `${toFileSlug(chatDisplayName(activeChat))}-chat.json`,
+    );
+    pushToast("Conversation exported as JSON.", "success");
   }
 
   async function handleLogout() {
@@ -830,10 +976,11 @@ export default function Home() {
         <div className="relative mt-3">
           <Search className="pointer-events-none absolute left-2.5 top-1/2 -translate-y-1/2 size-3.5 text-muted" />
           <input
+            ref={chatSearchInputRef}
             className="w-full rounded-[10px] bg-inset border border-border pl-8 pr-3 text-[13px] text-text placeholder:text-muted outline-none transition focus:border-accent focus:ring-2"
-            style={{ height: "34px", "--tw-ring-color": "color-mix(in oklab, var(--accent) 18%, transparent)" } as React.CSSProperties}
+            style={{ height: "34px", "--tw-ring-color": "color-mix(in oklab, var(--accent) 18%, transparent)" } as CSSProperties}
             onChange={(e) => setChatSearch(e.target.value)}
-            placeholder="Search documents"
+            placeholder="Search documents (Ctrl+K)"
             value={chatSearch}
           />
         </div>
@@ -1094,6 +1241,9 @@ export default function Home() {
 
               {/* Dropzone or textarea */}
               {intakeMode === "upload" ? (
+                uploadProgresses.length > 0 ? (
+                  <UploadReceivedState />
+                ) : (
                 <button
                   className="mt-4 w-full flex flex-col items-center justify-center rounded-[14px] p-10 text-center transition hover:opacity-90 disabled:cursor-not-allowed"
                   style={{
@@ -1103,6 +1253,7 @@ export default function Home() {
                       ? "inset 0 0 0 1px color-mix(in oklab, var(--accent) 35%, transparent)"
                       : "none",
                   }}
+                  aria-busy={isExtracting}
                   disabled={isExtracting}
                   onClick={handleBrowseFiles}
                   onDragEnter={handleFileDragOver}
@@ -1126,16 +1277,14 @@ export default function Home() {
                     ) : isDraggingFiles ? (
                       "Drop files to upload"
                     ) : (
-                      <>
-                        Drag & drop, or{" "}
-                        <span className="text-accent">browse</span>
-                      </>
+                      "Click to choose files or drop them here"
                     )}
                   </span>
                   <span className="mt-1.5 font-mono text-[10.5px] font-semibold uppercase tracking-[0.09em] text-muted">
                     PDF · TXT · MD — up to 8 MB
                   </span>
                 </button>
+                )
               ) : (
                 <textarea
                   className="mt-4 w-full resize-y rounded-[11px] border border-border bg-inset px-3.5 py-3 text-[13.5px] leading-relaxed text-text placeholder:text-muted outline-none transition focus:border-accent"
@@ -1147,14 +1296,20 @@ export default function Home() {
                 />
               )}
 
-              <input
-                ref={fileInputRef}
-                accept=".pdf,.txt,.md,application/pdf,text/plain,text/markdown"
-                className="hidden"
-                multiple
-                onChange={handleFileChange}
-                type="file"
-              />
+              {uploadProgresses.length > 0 && (
+                <UploadProgressList files={uploadProgresses} />
+              )}
+
+              {uploadProgresses.length === 0 && (
+                <input
+                  ref={fileInputRef}
+                  accept=".pdf,.txt,.md,application/pdf,text/plain,text/markdown"
+                  className="hidden"
+                  multiple
+                  onChange={handleFileChange}
+                  type="file"
+                />
+              )}
 
               {error && (
                 <div
@@ -1319,7 +1474,8 @@ export default function Home() {
               </button>
 
               <button
-                className="flex items-center gap-1.5 rounded-[10px] border border-border px-3 py-1.5 text-[12.5px] font-semibold text-text-muted transition hover:border-accent hover:text-accent shrink-0 order-[6]"
+                className="flex items-center gap-1.5 rounded-[10px] border border-border px-3 py-1.5 text-[12.5px] font-semibold text-text-muted transition hover:border-accent hover:text-accent shrink-0 order-[6] disabled:cursor-not-allowed disabled:opacity-50"
+                disabled={isExtracting || uploadProgresses.length > 0}
                 onClick={handleBrowseFiles}
                 type="button"
               >
@@ -1327,15 +1483,21 @@ export default function Home() {
                 Add
               </button>
 
-              <input
-                ref={fileInputRef}
-                accept=".pdf,.txt,.md,application/pdf,text/plain,text/markdown"
-                className="hidden"
-                multiple
-                onChange={handleFileChange}
-                type="file"
-              />
+              {uploadProgresses.length === 0 && (
+                <input
+                  ref={fileInputRef}
+                  accept=".pdf,.txt,.md,application/pdf,text/plain,text/markdown"
+                  className="hidden"
+                  multiple
+                  onChange={handleFileChange}
+                  type="file"
+                />
+              )}
             </div>
+
+            {uploadProgresses.length > 0 && (
+              <UploadProgressList files={uploadProgresses} compact />
+            )}
 
             {/* Workspace + Chat */}
             <div className="flex flex-1 min-h-0" style={{ gap: "var(--gap)" }}>
@@ -1438,16 +1600,70 @@ export default function Home() {
                       Grounded in this document
                     </p>
                   </div>
-                  <button
-                    className="flex items-center gap-1.5 rounded-[10px] border border-border px-3 py-1.5 text-[12.5px] font-semibold text-text-muted transition hover:border-accent hover:text-accent disabled:opacity-40 disabled:cursor-not-allowed"
-                    disabled={!hasChatMessages || isAnswering}
-                    onClick={exportChat}
-                    type="button"
-                  >
-                    <Download className="size-3.5" />
-                    PDF
-                  </button>
+                  <div className="relative" ref={chatExportMenuRef}>
+                    <button
+                      className="flex items-center gap-1.5 rounded-[10px] border border-border px-3 py-1.5 text-[12.5px] font-semibold text-text-muted transition hover:border-accent hover:text-accent disabled:opacity-40 disabled:cursor-not-allowed"
+                      disabled={!hasChatMessages || isAnswering}
+                      onClick={() => setShowChatExportMenu((current) => !current)}
+                      type="button"
+                      aria-expanded={showChatExportMenu}
+                      aria-haspopup="menu"
+                    >
+                      <Download className="size-3.5" />
+                      Export
+                      <ChevronDown
+                        className={`size-3 transition ${showChatExportMenu ? "rotate-180" : ""}`}
+                      />
+                    </button>
+
+                    {showChatExportMenu && (
+                      <div
+                        className="absolute right-0 top-[calc(100%+8px)] z-30 w-[180px] overflow-hidden rounded-[12px] border border-border bg-panel p-1.5 shadow-card"
+                        role="menu"
+                      >
+                        <button
+                          className="flex w-full items-center justify-between rounded-[9px] px-2.5 py-2 text-left text-[12.5px] font-semibold text-text-muted transition hover:bg-inset hover:text-text"
+                          onClick={exportChat}
+                          role="menuitem"
+                          type="button"
+                        >
+                          PDF
+                          <span className="font-mono text-[9px] text-muted">.pdf</span>
+                        </button>
+                        <button
+                          className="flex w-full items-center justify-between rounded-[9px] px-2.5 py-2 text-left text-[12.5px] font-semibold text-text-muted transition hover:bg-inset hover:text-text"
+                          onClick={exportChatJson}
+                          role="menuitem"
+                          type="button"
+                        >
+                          JSON
+                          <span className="font-mono text-[9px] text-muted">.json</span>
+                        </button>
+                      </div>
+                    )}
+                  </div>
                 </div>
+
+                {hasChatMessages && (
+                  <div className="border-b border-border px-[var(--pad)] py-3">
+                    <div className="relative">
+                      <Search className="pointer-events-none absolute left-2.5 top-1/2 -translate-y-1/2 size-3.5 text-muted" />
+                      <input
+                        ref={chatHistorySearchInputRef}
+                        className="w-full rounded-[10px] bg-inset border border-border pl-8 pr-3 text-[12.5px] text-text placeholder:text-muted outline-none transition focus:border-accent"
+                        style={{ height: "32px" }}
+                        onChange={(e) => setChatHistorySearch(e.target.value)}
+                        placeholder="Search conversation history"
+                        value={chatHistorySearch}
+                      />
+                    </div>
+                    {chatHistorySearch.trim() && (
+                      <p className="mt-1.5 font-mono text-[9.5px] text-muted">
+                        {visibleChatMessages.length} of {activeChat?.messages.length ?? 0} messages
+                      </p>
+                    )}
+                  </div>
+                )}
 
                 {/* Messages */}
                 <div
@@ -1456,17 +1672,21 @@ export default function Home() {
                   style={{ padding: "var(--pad)" }}
                 >
                   {activeChat?.messages.length ? (
-                    activeChat.messages.map((message, index) => (
+                    visibleChatMessages.length ? (
+                      visibleChatMessages.map((message) => (
                       <ChatBubble
                         key={message.id}
                         message={message}
                         isStreaming={
                           isAnswering &&
                           message.role === "assistant" &&
-                          index === activeChat.messages.length - 1
+                          message.id === activeChat.messages[activeChat.messages.length - 1]?.id
                         }
                       />
-                    ))
+                      ))
+                    ) : (
+                      <EmptyChatSearchState />
+                    )
                   ) : (
                     <div className="flex flex-1 flex-col items-center justify-center text-center py-8">
                       <div
@@ -1485,28 +1705,48 @@ export default function Home() {
 
                 {/* Composer */}
                 <form
-                  className="border-t border-border shrink-0 flex items-center gap-2"
+                  ref={questionFormRef}
+                  className="border-t border-border shrink-0"
                   style={{ padding: "12px var(--pad)" }}
                   onSubmit={handleQuestion}
                 >
-                  <input
-                    className="flex-1 min-w-0 rounded-[11px] bg-inset border border-border px-3.5 text-[13px] text-text placeholder:text-muted outline-none transition focus:border-accent"
-                    style={{ height: "var(--control-h)" }}
-                    onChange={(e) => setQuestion(e.target.value)}
-                    placeholder="Ask about this document…"
-                    value={question}
-                  />
-                  <button
-                    className="size-[34px] flex shrink-0 items-center justify-center rounded-[10px] bg-accent text-on-accent transition hover:opacity-90 disabled:opacity-50 disabled:cursor-not-allowed"
-                    disabled={isAnswering || !hasDocument}
-                    type="submit"
-                  >
-                    {isAnswering ? (
-                      <Loader2 className="size-4 animate-spin" />
-                    ) : (
-                      <ArrowRight className="size-4" />
-                    )}
-                  </button>
+                  <div className="flex items-center gap-2">
+                    <input
+                      ref={questionInputRef}
+                      aria-invalid={isQuestionOverLimit}
+                      className="flex-1 min-w-0 rounded-[11px] bg-inset border border-border px-3.5 text-[13px] text-text placeholder:text-muted outline-none transition focus:border-accent"
+                      style={{
+                        height: "var(--control-h)",
+                        borderColor: isQuestionOverLimit ? "var(--danger)" : undefined,
+                      }}
+                      onChange={(e) => setQuestion(e.target.value)}
+                      onKeyDown={(event) => {
+                        if ((event.ctrlKey || event.metaKey) && event.key === "Enter") {
+                          event.preventDefault();
+                          questionFormRef.current?.requestSubmit();
+                        }
+                      }}
+                      placeholder="Ask about this document..."
+                      value={question}
+                    />
+                    <button
+                      className="size-[34px] flex shrink-0 items-center justify-center rounded-[10px] bg-accent text-on-accent transition hover:opacity-90 disabled:opacity-50 disabled:cursor-not-allowed"
+                      disabled={isAnswering || !hasDocument || isQuestionOverLimit}
+                      type="submit"
+                    >
+                      {isAnswering ? (
+                        <Loader2 className="size-4 animate-spin" />
+                      ) : (
+                        <ArrowRight className="size-4" />
+                      )}
+                    </button>
+                  </div>
+                  <div className="mt-1.5 flex items-center justify-between gap-2 font-mono text-[9.5px]">
+                    <span className="text-muted">Ctrl+Enter to send</span>
+                    <span style={{ color: isQuestionOverLimit ? "var(--danger)" : "var(--muted)" }}>
+                      {questionLength.toLocaleString()} / {QUESTION_MAX_LENGTH.toLocaleString()}
+                    </span>
+                  </div>
                 </form>
               </div>
             </div>
@@ -1515,6 +1755,8 @@ export default function Home() {
       </main>
 
       {/* ── LOGIN MODAL (soft-auth) ──────────────────────────────────── */}
+      <ToastStack toasts={toasts} onDismiss={dismissToast} />
+
       {showAuthModal && (
         <div
           className="fixed inset-0 z-50 flex items-center justify-center p-4"
@@ -1603,6 +1845,125 @@ function SectionPill({ color, label }: { color: "accent" | "ok" | "danger"; labe
       />
       {label}
     </span>
+  );
+}
+
+function UploadReceivedState() {
+  return (
+    <div
+      className="mt-4 w-full flex flex-col items-center justify-center rounded-[14px] border border-border bg-inset p-10 text-center"
+      aria-live="polite"
+    >
+      <div
+        className="flex size-12 items-center justify-center rounded-[12px]"
+        style={{
+          background: "color-mix(in oklab, var(--accent) 12%, transparent)",
+          color: "var(--accent)",
+        }}
+      >
+        <Loader2 className="size-6 animate-spin" />
+      </div>
+      <p className="mt-3 text-[13.5px] font-semibold text-text">File received</p>
+      <p className="mt-1.5 max-w-[260px] text-[12.5px] leading-5 text-muted">
+        Preparing the document for analysis.
+      </p>
+    </div>
+  );
+}
+
+function UploadProgressList({
+  files,
+  compact = false,
+}: {
+  files: UploadProgress[];
+  compact?: boolean;
+}) {
+  return (
+    <div
+      className={`rounded-[12px] border border-border bg-inset ${compact ? "px-3 py-2" : "mt-3 p-3"}`}
+    >
+      <div className="space-y-2">
+        {files.map((file) => (
+          <div key={file.fileName}>
+            <div className="flex items-center justify-between gap-3">
+              <span className="min-w-0 truncate text-[12px] font-semibold text-text">
+                {file.fileName}
+              </span>
+              <span
+                className="shrink-0 font-mono text-[9.5px] font-semibold"
+                style={{
+                  color:
+                    file.status === "Error"
+                      ? "var(--danger)"
+                      : file.status === "Ready"
+                        ? "var(--ok)"
+                        : "var(--muted)",
+                }}
+              >
+                {file.status}
+              </span>
+            </div>
+            <div className="mt-1.5 h-1.5 overflow-hidden rounded-full bg-panel">
+              <div
+                className="h-full rounded-full transition-all duration-300"
+                style={{
+                  width: `${file.progress}%`,
+                  background:
+                    file.status === "Error"
+                      ? "var(--danger)"
+                      : file.status === "Ready"
+                        ? "var(--ok)"
+                        : "var(--accent)",
+                }}
+              />
+            </div>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+function EmptyChatSearchState() {
+  return (
+    <div className="flex flex-1 flex-col items-center justify-center text-center py-8">
+      <Search className="size-5 text-muted" />
+      <h3 className="mt-3 text-[13.5px] font-semibold text-text">No matching messages</h3>
+      <p className="mt-1.5 max-w-[220px] text-[12.5px] leading-5 text-muted">
+        Try another word from this conversation.
+      </p>
+    </div>
+  );
+}
+
+function ToastStack({
+  toasts,
+  onDismiss,
+}: {
+  toasts: ToastMessage[];
+  onDismiss: (id: string) => void;
+}) {
+  if (!toasts.length) return null;
+
+  return (
+    <div className="fixed right-5 top-5 z-[60] flex w-[320px] max-w-[calc(100vw-32px)] flex-col gap-2">
+      {toasts.map((toast) => (
+        <button
+          key={toast.id}
+          className="fade-in-up rounded-[13px] border bg-panel px-3.5 py-3 text-left shadow-card transition hover:-translate-y-0.5"
+          style={{
+            borderColor: `color-mix(in oklab, var(--${toast.tone === "error" ? "danger" : toast.tone === "success" ? "ok" : "accent"}) 28%, transparent)`,
+          }}
+          onClick={() => onDismiss(toast.id)}
+          type="button"
+        >
+          <p className="text-[12.5px] font-semibold text-text">{toast.message}</p>
+          <p className="mt-0.5 font-mono text-[9.5px] uppercase tracking-[0.08em] text-muted">
+            Click to dismiss
+          </p>
+        </button>
+      ))}
+    </div>
   );
 }
 
@@ -1918,6 +2279,17 @@ function ChatBubble({
 
 // ── Pure helpers ───────────────────────────────────────────────────────
 
+function useDebouncedValue<T>(value: T, delayMs: number) {
+  const [debouncedValue, setDebouncedValue] = useState(value);
+
+  useEffect(() => {
+    const timer = window.setTimeout(() => setDebouncedValue(value), delayMs);
+    return () => window.clearTimeout(timer);
+  }, [delayMs, value]);
+
+  return debouncedValue;
+}
+
 async function streamFromApi(
   url: string,
   body: Record<string, unknown>,
@@ -1965,6 +2337,20 @@ function buildChatExport(chat?: ChatSession) {
   return `# Document Export\n\nDocument: ${chat.documentName}\nGenerated: ${generatedAt}\n\n${messages}\n`;
 }
 
+function buildChatJsonExport(chat: ChatSession) {
+  return {
+    id: chat.id,
+    title: chatDisplayName(chat),
+    documentName: chat.documentName,
+    documents: currentDocuments(chat).map((document) => ({
+      fileName: document.fileName,
+      characters: document.text.trim().length,
+    })),
+    exportedAt: new Date().toISOString(),
+    messages: chat.messages,
+  };
+}
+
 function formatMarkdownBullets(content: string) {
   const bullets = normalizeBullets(content);
   return bullets.length ? bullets.map((b) => `- ${b}`).join("\n") : "No items were generated.";
@@ -1995,6 +2381,16 @@ async function downloadPdf(content: string, fileName: string, title: string) {
     y += style.after;
   }
   doc.save(fileName);
+}
+
+function downloadJson(data: unknown, fileName: string) {
+  const blob = new Blob([JSON.stringify(data, null, 2)], { type: "application/json" });
+  const url = URL.createObjectURL(blob);
+  const anchor = document.createElement("a");
+  anchor.href = url;
+  anchor.download = fileName;
+  anchor.click();
+  URL.revokeObjectURL(url);
 }
 
 function sanitizePdfText(value: string) {
